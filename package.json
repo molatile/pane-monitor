@@ -1,0 +1,41 @@
+{
+  "name": "agentwatch",
+  "version": "1.0.0",
+  "description": "Terminal monitor and permission prompt interceptor for AI coding agents",
+  "main": "src/agentwatch.js",
+  "bin": {
+    "agentwatch": "./bin/agentwatch.js",
+    "spike": "./spike.js"
+  },
+  "scripts": {
+    "test": "node tests/test-unit.js && node tests/test-agentwatch.js && node tests/test-dashboard.js",
+    "test:unit": "node tests/test-unit.js",
+    "test:agentwatch": "node tests/test-agentwatch.js",
+    "test:dash": "node tests/test-dashboard.js",
+    "test:integration": "node tests/test-integration.js",
+    "test:fast": "node tests/test-fast-prompt.js",
+    "test:gui": "node tests/test-gui.js",
+    "test:stage3a": "node tests/test-stage3a.js",
+    "test:unselect": "node tests/test-gui-unselect.js",
+    "test:all": "npm test && npm run test:gui && npm run test:stage3a && npm run test:unselect && npm run test:fast && npm run test:integration",
+    "dash": "node bin/agentwatch.js dash",
+    "gui": "node bin/agentwatch.js gui"
+  },
+  "keywords": [
+    "pty",
+    "conpty",
+    "terminal",
+    "agentwatch",
+    "antigravity",
+    "monitor"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@xterm/headless": "^6.0.0",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "electron": "^44.9.0"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "defaultDelaySeconds": 3,
+  "deny": [
+    "rm -rf",
+    "rmdir /s",
+    "del /f",
+    "Remove-Item -Recurse",
+    "format",
+    "git push --force",
+    "git reset --hard",
+    "curl.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)",
+    "wget.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)",
+    "powershell -enc",
+    "sudo",
+    "chmod 777",
+    ".env",
+    "settings.json",
+    ".ssh",
+    "credentials"
+  ],
+  "allow": [
+    {
+      "name": "node-safe",
+      "pattern": "^(?:node|npm|npx|git status|git diff|git log|ls|dir)\\b",
+      "delay": 3
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "id": "agy",
+  "name": "Antigravity CLI",
+  "commandNames": ["agy", "antigravity"],
+  "prompt": {
+    "commandBlockStart": "Requesting permission for:",
+    "questionPattern": "Run this command\\?",
+    "footerPrefix": "↑/↓ Navigate",
+    "optionLinePattern": "^\\s*>?\\s*(\\d+)\\.\\s+(.*)$",
+    "minOptions": 2
+  },
+  "optionClassification": {
+    "yes_once": {
+      "startsWith": "Yes",
+      "notContains": ["always", "persist"]
+    },
+    "yes_session": {
+      "startsWith": "Yes",
+      "contains": ["always allow in this conversation"]
+    },
+    "yes_persist": {
+      "containsAny": ["persist", "settings.json"]
+    },
+    "no": {
+      "startsWith": "No"
+    }
+  },
+  "stateThresholds": {
+    "busyThresholdMs": 1500,
+    "idleThresholdMs": 3000
+  },
+  "inputBoxPattern": "(?:^[›❯>\\$]|Type a message|Enter a prompt)",
+  "background_task_patterns": [
+    "^\\s*●\\s*\\[\\d{2}:\\d{2}:\\d{2}\\].*\\brunning\\s*$"
+  ]
+}
+

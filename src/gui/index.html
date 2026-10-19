@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>agentwatch</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" class="app-container">
+    <header class="app-header">
+      <div class="header-left">
+        <span class="app-title">agentwatch</span>
+        <span id="agent-count-badge" class="count-badge">0 agents active</span>
+      </div>
+      <div class="header-tabs">
+        <button id="tab-btn-agents" class="tab-btn active" type="button">Agents</button>
+        <button id="tab-btn-settings" class="tab-btn" type="button">Settings</button>
+      </div>
+      <div class="header-right">
+        <label class="pin-toggle" title="Toggle Always on Top">
+          <input type="checkbox" id="always-on-top-checkbox">
+          <span class="pin-label">📌 Pin</span>
+        </label>
+      </div>
+    </header>
+
+    <!-- AGENTS TAB VIEW -->
+    <div id="agents-view" class="tab-view active">
+      <!-- Live Agents -->
+      <section class="live-agents-section">
+        <main id="sessions-container" class="sessions-list">
+          <div id="empty-state" class="empty-state">
+            No agents running. Start one with: agentwatch &lt;agent&gt;  (for example: agentwatch agy)
+          </div>
+        </main>
+      </section>
+
+      <!-- Past Agents (Collapsed by default) -->
+      <section class="past-agents-section">
+        <details id="past-agents-details">
+          <summary class="past-agents-summary">
+            <span>Past agents (<span id="past-agents-count">0</span>)</span>
+          </summary>
+          <div id="past-agents-list" class="past-agents-list"></div>
+        </details>
+      </section>
+
+      <!-- History Pane for Selected Agent -->
+      <section class="history-pane" id="history-pane">
+        <div id="history-header" class="history-header" style="display: none;">
+          <div class="history-header-info">
+            <span class="history-label">History:</span>
+            <span id="history-agent-name" class="history-agent-name"></span>
+          </div>
+          <button id="clear-history-btn" class="clear-history-btn" type="button">Clear this agent's history</button>
+        </div>
+        <div id="history-content" class="history-content">
+          <div id="history-placeholder" class="history-placeholder">
+            Select an agent to see its history
+          </div>
+          <div id="history-groups" class="history-groups"></div>
+          <div id="load-older-container" class="load-older-container" style="display: none;">
+            <button id="load-older-btn" class="load-older-btn" type="button">Load older</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- SETTINGS TAB VIEW -->
+    <div id="settings-view" class="tab-view" style="display: none;">
+      <section class="settings-container">
+        <div class="settings-group">
+          <label class="setting-item">
+            <input type="checkbox" id="setting-auto-open">
+            <div class="setting-text">
+              <span class="setting-label">Auto-open window</span>
+              <span class="setting-desc">Open the agentwatch window automatically when an agent starts</span>
+            </div>
+          </label>
+
+          <label class="setting-item">
+            <input type="checkbox" id="setting-pin-top">
+            <div class="setting-text">
+              <span class="setting-label">Pin on top</span>
+              <span class="setting-desc">Keep the window always above other windows</span>
+            </div>
+          </label>
+
+          <label class="setting-item">
+            <input type="checkbox" id="setting-notifications">
+            <div class="setting-text">
+              <span class="setting-label">Notifications</span>
+              <span class="setting-desc">Show desktop notifications when an agent asks for permission or completes</span>
+            </div>
+          </label>
+
+          <div class="setting-item-select">
+            <label for="setting-time-format" class="setting-label">Time format</label>
+            <select id="setting-time-format" class="setting-select">
+              <option value="24-hour">24-hour (e.g. 22:00)</option>
+              <option value="12-hour">12-hour (e.g. 10:00 PM)</option>
+            </select>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

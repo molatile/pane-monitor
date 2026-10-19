@@ -1,0 +1,7 @@
+node_modules/
+raw-session.bin
+prompts.log
+dustbin/
+screen-snapshots.txt
+timing.txt
+history.jsonl
