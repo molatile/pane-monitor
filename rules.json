@@ -18,11 +18,105 @@
     ".ssh",
     "credentials"
   ],
+  "danger": [
+    { "text": "delete", "wholeWord": false },
+    { "text": "remove", "wholeWord": false },
+    { "text": "erase", "wholeWord": false },
+    { "text": "rmdir", "wholeWord": false },
+    { "text": "del", "wholeWord": true },
+    { "text": "rm", "wholeWord": true },
+    { "text": "unlink", "wholeWord": false },
+    { "text": "drop table", "wholeWord": false },
+    { "text": "drop database", "wholeWord": false },
+    { "text": "truncate", "wholeWord": false },
+    { "text": "format", "wholeWord": true },
+    { "text": "mkfs", "wholeWord": false },
+    { "text": "kill", "wholeWord": false },
+    { "text": "taskkill", "wholeWord": false },
+    { "text": "shutdown", "wholeWord": false },
+    { "text": "reboot", "wholeWord": false },
+    { "text": "--force", "wholeWord": false },
+    { "text": "-rf", "wholeWord": false },
+    { "text": "sudo", "wholeWord": false },
+    { "text": "chmod", "wholeWord": false },
+    { "text": "chown", "wholeWord": false },
+    { "text": "reset --hard", "wholeWord": false },
+    { "text": "clean -fd", "wholeWord": false },
+    { "text": "push", "wholeWord": false },
+    { "text": "publish", "wholeWord": false },
+    { "text": "deploy", "wholeWord": false },
+    { "text": "uninstall", "wholeWord": false },
+    { "text": "curl", "wholeWord": false },
+    { "text": "wget", "wholeWord": false },
+    { "text": "Invoke-WebRequest", "wholeWord": false },
+    { "text": "Invoke-Expression", "wholeWord": false },
+    { "text": "iex", "wholeWord": true },
+    { "text": "ssh", "wholeWord": false },
+    { "text": "scp", "wholeWord": false },
+    { "text": "reg add", "wholeWord": false },
+    { "text": "reg delete", "wholeWord": false },
+    { "text": ".env", "wholeWord": false },
+    { "text": "secret", "wholeWord": false },
+    { "text": "password", "wholeWord": false },
+    { "text": "token", "wholeWord": false },
+    { "text": "credentials", "wholeWord": false },
+    { "text": "private key", "wholeWord": false }
+  ],
   "allow": [
     {
-      "name": "node-safe",
-      "pattern": "^(?:node|npm|npx|git status|git diff|git log|ls|dir)\\b",
+      "name": "git-readonly",
+      "pattern": "^(?:git\\s+status(?:\\s+(?:--[a-zA-Z0-9_-]+(?:=[a-zA-Z0-9_.-]+)?|-[a-zA-Z0-9]+|\\d+|[a-zA-Z0-9_./@~-]+))*|git\\s+branch(?:\\s+(?:-a|-r|--list|-v))*|git\\s+(?:diff|log)(?!\\s*.*(?:^|\\s)(?:--[a-zA-Z0-9_-]*(?:output|out\\b|file)[a-zA-Z0-9_-]*|-[oO]\\b|-[oO]=|-[oO]\\S|--[a-zA-Z0-9_-]+=[^\\s]*[\\\\/.]))(?:\\s+(?:--[a-zA-Z0-9_-]+(?:=[a-zA-Z0-9_.-]+)?|-[a-zA-Z0-9]+|\\d+|[a-zA-Z0-9_./@~-]+))*)$",
       "delay": 3
+    },
+    {
+      "name": "file-list",
+      "pattern": "^(?:pwd|Get-Location|(?:ls|dir|Get-ChildItem)(?:\\s+(?!.*\\.\\.)(?![\\/\\\\]|[a-zA-Z]:)(?:-[a-zA-Z0-9]+|['\"]?(?:\\.[\\/\\\\])?[a-zA-Z0-9_@~.-]+(?:[\\/\\\\][a-zA-Z0-9_@~.-]+)*['\"]?))*)$",
+      "delay": 3
+    },
+    {
+      "name": "version-check",
+      "pattern": "^(?:npm|node)\\s+(?:--version|-v)$",
+      "delay": 3
+    },
+    {
+      "name": "echo-safe",
+      "pattern": "^echo(?:\\s+[^;&|><`$()\\r\\n]+)?$",
+      "delay": 3
+    },
+    // Tier 2 (disabled): npm run build, npm run lint, npm run dev, npm test
+    {
+      "name": "npm-build",
+      "_comment": "Tier 2: disabled",
+      "pattern": "^npm run build$",
+      "delay": 3,
+      "enabled": false
+    },
+    {
+      "name": "npm-lint",
+      "_comment": "Tier 2: disabled",
+      "pattern": "^npm run lint$",
+      "delay": 3,
+      "enabled": false
+    },
+    {
+      "name": "npm-dev",
+      "_comment": "Tier 2: disabled",
+      "pattern": "^npm run dev$",
+      "delay": 3,
+      "enabled": false
+    },
+    {
+      "name": "npm-test",
+      "_comment": "Tier 2: disabled",
+      "pattern": "^npm test$",
+      "delay": 3,
+      "enabled": false
+    }
+  ],
+  "optionRules": [
+    {
+      "name": "always-in-conversation",
+      "startsWith": "Yes, and always allow in this conversation"
     }
   ]
 }

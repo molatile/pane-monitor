@@ -30,8 +30,13 @@ let saveBoundsTimeout = null;
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
+  process.exit(0);
 } else {
   app.on('second-instance', (event, commandLine) => {
+    if (commandLine.some(arg => arg.includes('--restart'))) {
+      app.quit();
+      return;
+    }
     // Focus existing window on second launch (or explicit agentwatch gui)
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -39,6 +44,8 @@ if (!gotTheLock) {
         mainWindow.show();
         mainWindow.focus();
       }
+    } else {
+      createWindow();
     }
   });
 
@@ -46,16 +53,21 @@ if (!gotTheLock) {
   app.whenReady().then(createWindow);
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit();
-    }
+    try {
+      app.releaseSingleInstanceLock();
+    } catch (e) {}
+    app.quit();
   });
 
   app.on('will-quit', () => {
     try {
+      app.releaseSingleInstanceLock();
+    } catch (e) {}
+    try {
       const cfg = loadConfig(configPath);
       if (cfg.guiPid === process.pid) {
         delete cfg.guiPid;
+        delete cfg.guiStartTime;
         saveConfig(cfg, configPath);
       }
     } catch (e) {}
@@ -77,6 +89,7 @@ const notificationManager = new NotificationManager({
 function createWindow() {
   const config = loadConfig(configPath);
   config.guiPid = process.pid;
+  config.guiStartTime = Date.now();
   saveConfig(config, configPath);
 
   const bounds = config.window || { width: 420, height: 360 };
@@ -169,6 +182,19 @@ function createWindow() {
       clearInterval(updateInterval);
       updateInterval = null;
     }
+    if (saveBoundsTimeout) {
+      clearTimeout(saveBoundsTimeout);
+      saveBoundsTimeout = null;
+    }
+    try {
+      app.releaseSingleInstanceLock();
+    } catch (e) {}
+    app.quit();
+    setTimeout(() => {
+      try {
+        app.exit(0);
+      } catch (e) {}
+    }, 500).unref();
   });
 
   // Start periodic 1-second update
@@ -246,6 +272,10 @@ ipcMain.handle('set-setting', (event, { key, value }) => {
     notificationManager.setEnabled(cfg.notifications);
   } else if (key === 'timeFormat') {
     cfg.timeFormat = (value === '12-hour' || value === '12h') ? '12-hour' : '24-hour';
+  } else if (key === 'autoPaused') {
+    cfg.autoPaused = Boolean(value);
+  } else if (key === 'autoAcceptDefault') {
+    cfg.autoAcceptDefault = Boolean(value);
   }
   saveConfig(cfg, configPath);
   sendDashboardUpdate();

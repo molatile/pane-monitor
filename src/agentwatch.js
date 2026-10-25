@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 let pty;
 try {
   pty = require('node-pty');
@@ -9,15 +10,15 @@ try {
   pty = require('@lydell/node-pty');
 }
 const { Terminal } = require('@xterm/headless');
-const { extractPromptFromScreen } = require('./parser');
+const { extractPromptFromScreen, getSelectedOptionNumberFromScreen } = require('./parser');
 const { resolveExecutable } = require('./resolver');
 const { getProfileForCommand, getNoProfileNotice } = require('./profile');
-const { evaluatePrompt, loadRules } = require('./rules');
+const { evaluatePrompt, loadRules, isChoiceQuestion } = require('./rules');
 const { maskText, maskScreenLines } = require('./masker');
-const { appendHistoryEvent } = require('./history');
+const { appendHistoryEvent, computeAgreement } = require('./history');
 const { SessionStatusManager } = require('./status');
 const { SessionStateTracker } = require('./state');
-const { loadConfig, isGuiRunning } = require('./shared');
+const { loadConfig, isGuiRunning, isGuiStale, stopGui } = require('./shared');
 const { startGui } = require('./gui');
 
 /**
@@ -84,31 +85,48 @@ function startAgentwatch(options = {}) {
 
   const sessionStartTime = Date.now();
 
-  // Check auto-open window
+  // Auto-accept configuration (OFF by default, enabled via --auto or config.autoAcceptDefault)
   const config = loadConfig(options.configPath);
+  let autoAcceptEnabled = options.auto !== undefined
+    ? Boolean(options.auto)
+    : (options.autoAccept !== undefined ? Boolean(options.autoAccept) : Boolean(config.autoAcceptDefault));
+
+  // Check auto-open window
   const shouldAutoOpen = options.autoOpenWindow !== undefined
     ? Boolean(options.autoOpenWindow)
     : (config.autoOpenWindow !== false && !options.stdin && !process.env.AGENTWATCH_TEST);
 
-  if (shouldAutoOpen && !isGuiRunning(config)) {
-    try {
-      const res = startGui({
-        detached: true,
-        stdio: 'ignore',
-        autoOpen: true,
-        electronPath: options.electronPath,
-        args: options.guiArgs,
-        onLaunchError: (err) => {
-          console.error(`Note: Could not open agentwatch window: ${err.message}`);
+  if (shouldAutoOpen) {
+    const isRunning = isGuiRunning(config);
+    if (isRunning && isGuiStale(config)) {
+      stopGui(config, options.configPath);
+    }
+    if (!isGuiRunning(config)) {
+      try {
+        const res = startGui({
+          detached: true,
+          stdio: 'ignore',
+          autoOpen: true,
+          electronPath: options.electronPath,
+          args: options.guiArgs,
+          onLaunchError: (err) => {
+            console.error(`Note: Could not open agentwatch window: ${err.message}`);
+          }
+        });
+        if (!res) {
+          console.error('Note: Could not open agentwatch window: Electron is not installed.');
         }
-      });
-      if (!res) {
-        console.error('Note: Could not open agentwatch window: Electron is not installed.');
+      } catch (err) {
+        console.error(`Note: Could not open agentwatch window: ${err.message}`);
       }
-    } catch (err) {
-      console.error(`Note: Could not open agentwatch window: ${err.message}`);
     }
   }
+
+  const hasAllowPersist = Boolean(
+    rules &&
+    Array.isArray(rules.optionRules) &&
+    rules.optionRules.some(r => r && r.allowPersist === true)
+  );
 
   // Session ID & Status Manager
   const sessionId = options.sessionId || `session-${Date.now()}-${process.pid}`;
@@ -116,6 +134,8 @@ function startAgentwatch(options = {}) {
     sessionId,
     agent: agentName,
     hasProfile,
+    auto: autoAcceptEnabled,
+    allowPersist: hasAllowPersist,
     cwd: options.cwd || process.cwd(),
     pid: process.pid,
     sessionsDir: options.sessionsDir
@@ -159,14 +179,424 @@ function startAgentwatch(options = {}) {
       ? { ...activePrompt.detected, decision: activePrompt.decision }
       : null;
     const bgTasks = extra && extra.backgroundTasks !== undefined ? extra.backgroundTasks : (stateTracker.backgroundTasks || 0);
-    statusManager.update(newState, stateSince, promptSummary, { backgroundTasks: bgTasks });
+    const effectiveState = (activePrompt && activePrompt.inCountdown) ? 'countdown' : newState;
+    const countdownVal = (activePrompt && activePrompt.inCountdown) ? activePrompt.countdownSeconds : null;
+    statusManager.update(effectiveState, stateSince, promptSummary, { backgroundTasks: bgTasks, countdown: countdownVal });
   });
 
   let lastScreenText = null;
   let activePrompt = null;
+  let recentlyClosedPrompt = null;
   let promptDebounceTimer = null;
   let quietTimer = null;
   let lastSnapshotText = null;
+  let countdownTimer = null;
+  let lastUserKeystrokeTime = 0;
+  let lastChildDataReceivedTime = Date.now();
+  const autoAnswersHistory = options.autoAnswersHistory || [];
+
+  function checkCircuitBreaker(cmd, now = Date.now()) {
+    if (!autoAcceptEnabled) {
+      return { tripped: true, reason: 'auto-accept disabled for this session' };
+    }
+    const last60s = autoAnswersHistory.filter(e => now - e.time <= 60000);
+    if (last60s.length >= 8) {
+      return { tripped: true, reason: `more than 8 auto answers in 60 seconds (${last60s.length} in last 60s)` };
+    }
+    return { tripped: false };
+  }
+
+  function checkCircuitBreakerAfterSend(cmd, now = Date.now()) {
+    const last60s = autoAnswersHistory.filter(e => now - e.time <= 60000);
+    const last3 = autoAnswersHistory.slice(-3);
+    const is3SameIn30s = last3.length === 3 && last3.every(e => e.command === cmd && (now - e.time <= 30000));
+    const isMoreThan8In60s = last60s.length > 8;
+
+    if (isMoreThan8In60s || is3SameIn30s) {
+      const reason = isMoreThan8In60s
+        ? `more than 8 auto answers in 60 seconds (${last60s.length} in last 60s)`
+        : `same command auto-answered 3 times in a row within 30 seconds ("${cmd}")`;
+      return { tripped: true, reason };
+    }
+    return { tripped: false };
+  }
+
+  function applyCircuitBreakerTrip(reason) {
+    autoAcceptEnabled = false;
+    statusManager.auto = false;
+    const now = Date.now();
+    const timestamp = new Date(now).toISOString();
+    const logLine = `[${timestamp}] Circuit breaker tripped: ${reason}. Auto-accept disabled for this session.\n`;
+    try {
+      fs.appendFileSync(promptsLogPath, logLine, 'utf8');
+    } catch (e) {}
+
+    appendHistoryEvent({
+      type: 'circuit_breaker',
+      time: timestamp,
+      sessionId,
+      sessionKey: statusManager.sessionKey,
+      folder: statusManager.folder,
+      agent: (profile && profile.id) || 'agy',
+      reason,
+      outcome: 'disabled'
+    }, historyPath);
+
+    statusManager.countdown = null;
+    if (activePrompt) {
+      statusManager.update('asking', timestamp, {
+        ...activePrompt.detected,
+        decision: activePrompt.decision
+      });
+    }
+  }
+
+  // HARD SAFETY RULE:
+  // Exactly ONE function (sendAutoAnswer) may write anything to the child other than the user's own keystrokes.
+  // It sends exactly one key: the option's key from the profile (for the Antigravity profile, the single digit; no Enter).
+  // It can only be called from the auto-accept decision path.
+  function sendAutoAnswer(optionKey) {
+    const keyToSend = String(optionKey);
+    ptyProcess.write(keyToSend);
+
+    const now = Date.now();
+    const countdownDuration = activePrompt ? Math.max(0, Math.round((now - activePrompt.shownTime) / 1000)) : 3;
+
+    if (activePrompt && activePrompt.detected) {
+      const cmd = activePrompt.detected.commandSpaced || activePrompt.detected.command || '';
+      autoAnswersHistory.push({ time: now, command: cmd });
+      const cb = checkCircuitBreakerAfterSend(cmd, now);
+      if (cb.tripped) {
+        applyCircuitBreakerTrip(cb.reason);
+      }
+    }
+
+    if (activePrompt) {
+      activePrompt.autoAnswered = true;
+      activePrompt.answeredBy = 'auto';
+      activePrompt.hasFinalAnswer = true;
+      const matchedOpt = (activePrompt.detected.options || []).find(o => o.key === keyToSend || String(o.number) === keyToSend);
+      activePrompt.lastAnswerSignal = {
+        type: 'digit',
+        key: keyToSend,
+        option: matchedOpt,
+        optionNumber: matchedOpt ? matchedOpt.number : parseInt(keyToSend, 10) || 1
+      };
+      onFinalAnswerSeen(activePrompt);
+    }
+
+    const timestamp = new Date(now).toISOString();
+    const ruleName = (activePrompt && activePrompt.decision && activePrompt.decision.rule) || 'unknown';
+    const maskedSpaced = activePrompt && activePrompt.detected ? maskText(activePrompt.detected.commandSpaced || activePrompt.detected.command || '') : '';
+    const maskedCompact = activePrompt && activePrompt.detected ? maskText(activePrompt.detected.commandCompact || '') : '';
+
+    const matchedOpt = (activePrompt && activePrompt.detected && activePrompt.detected.options)
+      ? activePrompt.detected.options.find(o => o.key === keyToSend || String(o.number) === keyToSend)
+      : null;
+    const rawOptionText = (matchedOpt && matchedOpt.text)
+      ? matchedOpt.text
+      : ((activePrompt && activePrompt.decision && activePrompt.decision.optionText) || '');
+    const maskedOptionText = maskText(rawOptionText);
+
+    const logLine = `[${timestamp}]\nAuto-accepted command: ${maskedSpaced}\nRule: ${ruleName}\nOption key: ${keyToSend}\nOption text: ${maskedOptionText}\nCountdown: ${countdownDuration}s\nAnswered by: auto\n\n`;
+    try {
+      fs.appendFileSync(promptsLogPath, logLine, 'utf8');
+    } catch (e) {}
+
+    if (activePrompt && activePrompt.detected) {
+      appendHistoryEvent({
+        type: 'auto_answer',
+        time: timestamp,
+        sessionId,
+        sessionKey: statusManager.sessionKey,
+        folder: statusManager.folder,
+        agent: (profile && profile.id) || 'agy',
+        command: {
+          spaced: maskedSpaced,
+          compact: maskedCompact
+        },
+        rule: ruleName,
+        option_key: keyToSend,
+        option_text: maskedOptionText,
+        countdown_duration: countdownDuration,
+        answered_by: 'auto'
+      }, historyPath);
+    }
+
+    statusManager.countdown = null;
+  }
+
+  function cancelCountdown(reason = 'vetoed') {
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+    statusManager.countdown = null;
+    if (activePrompt) {
+      activePrompt.inCountdown = false;
+      const timestamp = new Date().toISOString();
+      const ruleName = (activePrompt.decision && activePrompt.decision.rule) || 'unknown';
+      const cmdSpaced = activePrompt.detected ? (activePrompt.detected.commandSpaced || activePrompt.detected.command || '') : '';
+      const cmdCompact = activePrompt.detected ? (activePrompt.detected.commandCompact || '') : '';
+
+      if (reason === 'vetoed') {
+        activePrompt.vetoed = true;
+        activePrompt.answeredBy = 'vetoed';
+        const logLine = `[${timestamp}] Auto-accept cancelled (vetoed by user)\n`;
+        try {
+          fs.appendFileSync(promptsLogPath, logLine, 'utf8');
+        } catch (e) {}
+        appendHistoryEvent({
+          type: 'auto_vetoed',
+          time: timestamp,
+          sessionId,
+          sessionKey: statusManager.sessionKey,
+          folder: statusManager.folder,
+          agent: (profile && profile.id) || 'agy',
+          command: {
+            spaced: maskText(cmdSpaced),
+            compact: maskText(cmdCompact)
+          },
+          rule: ruleName,
+          answered_by: 'vetoed',
+          outcome: 'vetoed'
+        }, historyPath);
+      } else if (reason === 'auto_paused') {
+        const logLine = `[${timestamp}] Auto-accept cancelled (autoPaused is true)\n`;
+        try {
+          fs.appendFileSync(promptsLogPath, logLine, 'utf8');
+        } catch (e) {}
+      } else if (reason === 'screen_changed') {
+        const logLine = `[${timestamp}] Auto-accept cancelled (screen changed during countdown)\n`;
+        try {
+          fs.appendFileSync(promptsLogPath, logLine, 'utf8');
+        } catch (e) {}
+      } else if (reason === 'danger') {
+        const matchedEntry = (activePrompt.decision && (activePrompt.decision.entry || activePrompt.decision.reason)) || 'danger';
+        const logLine = `[${timestamp}] Auto-accept cancelled (DANGER: ${maskText(matchedEntry)})\n`;
+        try {
+          fs.appendFileSync(promptsLogPath, logLine, 'utf8');
+        } catch (e) {}
+      }
+
+      statusManager.update('asking', timestamp, {
+        ...activePrompt.detected,
+        decision: activePrompt.decision
+      });
+    }
+  }
+
+  function isPromptEligibleForAuto(detected, decision) {
+    if (!autoAcceptEnabled) return false;
+    if (!hasProfile) return false;
+    if (!detected || !detected.footerSeen) return false;
+    if (!decision || decision.action !== 'would_approve') return false;
+
+    // Must not look like a choice question (no clear yes/no meaning)
+    if (isChoiceQuestion(detected)) return false;
+
+    // Option eligibility:
+    if (decision.ruleType === 'optionRule') {
+      const chosenOpt = (detected.options || []).find(o => o.key === decision.optionKey || String(o.number) === decision.optionKey);
+      if (!chosenOpt) return false;
+      // Option must not be a "no" option
+      if (chosenOpt.classification === 'no' || /^(?:no\b|cancel\b|abort\b|reject\b)/i.test((chosenOpt.text || '').trim())) {
+        return false;
+      }
+      // If persist option, rule must have allowPersist true
+      const isPersist = chosenOpt.classification === 'yes_persist' ||
+        /\b(?:persist|settings\.json)\b/i.test(chosenOpt.text || '') ||
+        (chosenOpt.text || '').toLowerCase().includes('persist') ||
+        (chosenOpt.text || '').toLowerCase().includes('settings.json');
+      if (isPersist) {
+        const optionRules = Array.isArray(rules.optionRules) ? rules.optionRules : [];
+        const ruleObj = optionRules.find(r => r && r.name === decision.rule);
+        if (!ruleObj || !ruleObj.allowPersist) {
+          return false;
+        }
+      }
+    } else {
+      // Existing command allow list requirements:
+      // Exactly ONE option on screen must be yes_once
+      const yesOnceOpts = (detected.options || []).filter(o => o.classification === 'yes_once');
+      if (yesOnceOpts.length !== 1) return false;
+
+      // Chosen option must be classified yes_once (never yes_session, yes_persist, or no)
+      const chosen = yesOnceOpts[0];
+      if (chosen.classification !== 'yes_once') return false;
+    }
+
+    // Check circuit breaker
+    const cmd = detected.commandSpaced || detected.command || '';
+    const cb = checkCircuitBreaker(cmd);
+    if (cb.tripped) {
+      applyCircuitBreakerTrip(cb.reason);
+      return false;
+    }
+
+    // Check config autoPaused
+    const liveCfg = loadConfig(options.configPath);
+    if (liveCfg.autoPaused) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function triggerAutoAnswer(promptObj) {
+    if (!promptObj || activePrompt !== promptObj) return;
+
+    if (Date.now() - lastUserKeystrokeTime < 1000) {
+      cancelCountdown('vetoed');
+      return;
+    }
+
+    const liveCfg = loadConfig(options.configPath);
+    if (liveCfg.autoPaused) {
+      cancelCountdown('auto_paused');
+      return;
+    }
+
+    const cmd = promptObj.detected.commandSpaced || promptObj.detected.command || '';
+    const cb = checkCircuitBreaker(cmd);
+    if (cb.tripped) {
+      cancelCountdown('circuit_breaker');
+      applyCircuitBreakerTrip(cb.reason);
+      return;
+    }
+
+    // Re-evaluate right before sending (Requirement 3):
+    // re-read live in-memory screen and confirm SAME prompt is still on screen
+    // with same command and same options, unchanged for at least 300 ms.
+    const now = Date.now();
+    const currentLines = getScreenLines();
+    const currentDetected = extractPromptFromScreen(currentLines, profile);
+
+    if (!currentDetected) {
+      cancelCountdown('screen_changed');
+      promptObj.decision = { action: 'needs_user', reason: 'prompt left screen' };
+      statusManager.update('asking', new Date().toISOString(), { decision: promptObj.decision });
+      return;
+    }
+
+    const curCmd = currentDetected.commandSpaced || currentDetected.command || '';
+    const origCmd = promptObj.detected.commandSpaced || promptObj.detected.command || '';
+    if (curCmd !== origCmd) {
+      cancelCountdown('screen_changed');
+      promptObj.decision = { action: 'needs_user', reason: 'command changed on screen' };
+      statusManager.update('asking', new Date().toISOString(), { ...currentDetected, decision: promptObj.decision });
+      return;
+    }
+
+    if (!currentDetected.options || currentDetected.options.length !== promptObj.detected.options.length) {
+      cancelCountdown('screen_changed');
+      promptObj.decision = { action: 'needs_user', reason: 'options changed on screen' };
+      statusManager.update('asking', new Date().toISOString(), { ...currentDetected, decision: promptObj.decision });
+      return;
+    }
+
+    for (let i = 0; i < currentDetected.options.length; i++) {
+      const co = currentDetected.options[i];
+      const oo = promptObj.detected.options[i];
+      if (!oo || co.key !== oo.key || co.text !== oo.text) {
+        cancelCountdown('screen_changed');
+        promptObj.decision = { action: 'needs_user', reason: 'options changed on screen' };
+        statusManager.update('asking', new Date().toISOString(), { ...currentDetected, decision: promptObj.decision });
+        return;
+      }
+    }
+
+    // Unchanged for at least 300 ms
+    if (now - lastChildDataReceivedTime < 300 || now - promptObj.shownTime < 300) {
+      cancelCountdown('screen_changed');
+      promptObj.decision = { action: 'needs_user', reason: 'screen changed within 300ms' };
+      statusManager.update('asking', new Date().toISOString(), { ...currentDetected, decision: promptObj.decision });
+      return;
+    }
+
+    // Check danger list right before sending - danger WINS over everything and cancels countdown
+    const currentDecision = evaluatePrompt(currentDetected, rules);
+    if (currentDecision && (currentDecision.danger || (currentDecision.reason && currentDecision.reason.startsWith('DANGER:')))) {
+      promptObj.decision = currentDecision;
+      cancelCountdown('danger');
+      return;
+    }
+
+    if (!currentDecision || currentDecision.action !== 'would_approve') {
+      promptObj.decision = currentDecision || { action: 'needs_user', reason: 'decision changed' };
+      cancelCountdown('screen_changed');
+      statusManager.update('asking', new Date().toISOString(), { ...currentDetected, decision: promptObj.decision });
+      return;
+    }
+
+    promptObj.inCountdown = false;
+    const optionKey = promptObj.decision.optionKey || currentDecision.optionKey || '1';
+    sendAutoAnswer(optionKey);
+  }
+
+  function startPromptCountdown(promptObj) {
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+
+    const delay = (promptObj.decision && promptObj.decision.delay !== undefined)
+      ? promptObj.decision.delay
+      : 3;
+    const delayMs = Math.max(0, Math.round(delay * 1000));
+    const initialSecs = Math.max(1, Math.ceil(delay));
+
+    promptObj.inCountdown = true;
+    promptObj.countdownSeconds = initialSecs;
+    promptObj.countdownStart = Date.now();
+    statusManager.countdown = initialSecs;
+    statusManager.update('countdown', new Date().toISOString(), {
+      ...promptObj.detected,
+      decision: promptObj.decision
+    }, { countdown: initialSecs, rule: promptObj.decision && promptObj.decision.rule });
+
+    if (delayMs <= 0) {
+      triggerAutoAnswer(promptObj);
+      return;
+    }
+
+    const intervalMs = delayMs < 1000 ? 50 : 1000;
+    const startTime = Date.now();
+
+    countdownTimer = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const remainingMs = delayMs - elapsed;
+      const remainingSecs = Math.max(0, Math.ceil(remainingMs / 1000));
+
+      if (!activePrompt || activePrompt !== promptObj || !promptObj.inCountdown) {
+        if (countdownTimer) clearInterval(countdownTimer);
+        countdownTimer = null;
+        return;
+      }
+
+      if (Date.now() - lastUserKeystrokeTime < 1000) {
+        cancelCountdown('vetoed');
+        return;
+      }
+
+      if (remainingMs > 0) {
+        promptObj.countdownSeconds = remainingSecs;
+        statusManager.countdown = remainingSecs;
+        statusManager.update('countdown', new Date().toISOString(), {
+          ...promptObj.detected,
+          decision: promptObj.decision
+        }, { countdown: remainingSecs, rule: promptObj.decision && promptObj.decision.rule });
+      } else {
+        if (countdownTimer) clearInterval(countdownTimer);
+        countdownTimer = null;
+        triggerAutoAnswer(promptObj);
+      }
+    }, intervalMs);
+
+    if (countdownTimer.unref) {
+      countdownTimer.unref();
+    }
+  }
 
   function getPromptFingerprint(detected) {
     if (!detected) return '';
@@ -227,10 +657,189 @@ function startAgentwatch(options = {}) {
     });
   }
 
+  function onFinalAnswerSeen(targetPrompt) {
+    if (targetPrompt === recentlyClosedPrompt && targetPrompt.closedEvent) {
+      const signal = targetPrompt.lastAnswerSignal;
+      let answerKey = 'unknown';
+      let answerOptionText = null;
+      let answerClass = 'unknown';
+      let agreement = 'n/a';
+
+      if (signal) {
+        if (signal.type === 'digit') {
+          answerKey = signal.key;
+          answerOptionText = signal.option ? maskText(signal.option.text) : null;
+          answerClass = (signal.option && signal.option.classification) || 'unknown';
+          agreement = computeAgreement(targetPrompt.decision, answerKey, answerClass);
+        } else if (signal.type === 'enter') {
+          answerKey = 'enter';
+          answerOptionText = signal.option ? maskText(signal.option.text) : null;
+          answerClass = (signal.option && signal.option.classification) || 'unknown';
+          agreement = computeAgreement(targetPrompt.decision, answerKey, answerClass);
+        } else if (signal.type === 'esc') {
+          answerKey = 'esc';
+          answerOptionText = null;
+          answerClass = 'no';
+          agreement = computeAgreement(targetPrompt.decision, answerKey, answerClass);
+        } else if (signal.type === 'amended') {
+          answerKey = 'amended';
+          answerOptionText = null;
+          answerClass = 'unknown';
+          agreement = computeAgreement(targetPrompt.decision, answerKey, answerClass);
+        }
+      }
+
+      targetPrompt.closedEvent.answer_key = answerKey;
+      targetPrompt.closedEvent.answer_option_text = answerOptionText;
+      targetPrompt.closedEvent.answer_class = answerClass;
+      targetPrompt.closedEvent.agreement = agreement;
+      const answeredBy = targetPrompt.autoAnswered ? 'auto' : (targetPrompt.vetoed ? 'user' : (signal ? 'user' : 'unknown'));
+      targetPrompt.closedEvent.answered_by = answeredBy;
+
+      // Update in historyPath
+      const targetHistoryPath = historyPath || path.join(os.homedir(), '.agentwatch', 'history.jsonl');
+      if (fs.existsSync(targetHistoryPath)) {
+        try {
+          const content = fs.readFileSync(targetHistoryPath, 'utf8');
+          const lines = content.trim().split('\n');
+          for (let i = lines.length - 1; i >= 0; i--) {
+            if (!lines[i].trim()) continue;
+            try {
+              const ev = JSON.parse(lines[i]);
+              if (ev.type === 'prompt_closed' && ev.time === targetPrompt.closedEvent.time) {
+                targetPrompt.closedEvent.sessionId = ev.sessionId;
+                lines[i] = JSON.stringify(targetPrompt.closedEvent);
+                fs.writeFileSync(targetHistoryPath, lines.join('\n') + '\n', 'utf8');
+                break;
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  function handlePromptKeystroke(buf, now = Date.now()) {
+    let targetPrompt = null;
+    if (activePrompt) {
+      targetPrompt = activePrompt;
+    } else if (recentlyClosedPrompt) {
+      const elapsed = now - (recentlyClosedPrompt.disappearedAt || recentlyClosedPrompt.closedAt || 0);
+      if (elapsed <= 300) {
+        targetPrompt = recentlyClosedPrompt;
+      } else {
+        recentlyClosedPrompt = null;
+      }
+    }
+
+    if (!targetPrompt) return;
+
+    // Fix 1: Once a final answer signal is seen for a prompt, record it and ignore
+    // any further keystrokes for that prompt, including Enter, Esc and other digits.
+    // Do not let a later key overwrite it.
+    if (targetPrompt.hasFinalAnswer) {
+      return;
+    }
+
+    // 1. Tab (0x09) or Ctrl+G (0x07): Enter amend/edit mode
+    if (buf.includes(0x09) || buf.includes(0x07)) {
+      targetPrompt.isAmending = true;
+      targetPrompt.lastAnswerSignal = {
+        type: 'amended',
+        key: 'amended',
+        option: null,
+        optionNumber: null
+      };
+      // Amend is NOT final yet - user may type then hit Enter or Esc
+      return;
+    }
+
+    // 2. Esc key alone (0x1b, length 1)
+    // "Enter and Esc are final only when no digit answer was seen first."
+    if (buf.length === 1 && buf[0] === 0x1b) {
+      targetPrompt.isAmending = false;
+      targetPrompt.lastAnswerSignal = {
+        type: 'esc',
+        key: 'esc',
+        option: null,
+        optionNumber: null
+      };
+      targetPrompt.hasFinalAnswer = true;
+      onFinalAnswerSeen(targetPrompt);
+      return;
+    }
+
+    // 3. Arrow keys and other multi-byte escape sequences (e.g. \x1b[A, \x1b[B):
+    // "Arrow keys still only move the selection and are never answers."
+    if (buf.length > 1 && buf[0] === 0x1b) {
+      return;
+    }
+
+    // 4. Enter key (0x0d or 0x0a)
+    // "Enter and Esc are final only when no digit answer was seen first."
+    const isEnter = (buf.length === 1 && (buf[0] === 0x0d || buf[0] === 0x0a)) ||
+                    (buf.length === 2 && buf[0] === 0x0d && buf[1] === 0x0a);
+    if (isEnter) {
+      if (targetPrompt.isAmending) {
+        targetPrompt.lastAnswerSignal = {
+          type: 'amended',
+          key: 'amended',
+          option: null,
+          optionNumber: null
+        };
+      } else {
+        const lines = getScreenLines();
+        const selectedNum = getSelectedOptionNumberFromScreen(lines) || targetPrompt.lastSelectedOptionNumber || 1;
+        const chosenOption = (targetPrompt.detected.options || []).find(o => o.number === selectedNum) ||
+                             (targetPrompt.detected.options && targetPrompt.detected.options[0]) ||
+                             null;
+        targetPrompt.lastAnswerSignal = {
+          type: 'enter',
+          key: 'enter',
+          option: chosenOption,
+          optionNumber: selectedNum
+        };
+      }
+      targetPrompt.hasFinalAnswer = true;
+      onFinalAnswerSeen(targetPrompt);
+      return;
+    }
+
+    // 5. Single digit key matching an option number shown on screen (1 to 4)
+    // "A digit that matches an option number shown on screen is a FINAL answer signal."
+    // "a digit that does not match any option (ignored)"
+    if (!targetPrompt.isAmending && buf.length === 1 && buf[0] >= 0x30 && buf[0] <= 0x39) {
+      const digit = buf[0] - 0x30;
+      const matchedOption = (targetPrompt.detected.options || []).find(o => o.number === digit || o.key === String(digit));
+      if (matchedOption) {
+        targetPrompt.lastAnswerSignal = {
+          type: 'digit',
+          key: digit,
+          option: matchedOption,
+          optionNumber: digit
+        };
+        targetPrompt.hasFinalAnswer = true;
+        onFinalAnswerSeen(targetPrompt);
+        return;
+      }
+      // Out-of-range or non-matching digit: ignored!
+      return;
+    }
+
+    // 6. Anything else: letters, pasted text, symbols, spaces
+    // PRIVACY RULE: Do NOT store the key itself. Never store, log or display any other keystroke.
+  }
+
   function closeActivePrompt(reason) {
     if (!activePrompt) return;
     const now = Date.now();
     const timestamp = new Date(now).toISOString();
+
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+    statusManager.countdown = null;
 
     let durationSeconds;
     let durationLogStr;
@@ -245,7 +854,46 @@ function startAgentwatch(options = {}) {
       durationLogStr = `${timestamp}`;
     }
 
-    const entry = `Prompt closed at ${durationLogStr}\n\n`;
+    let answerKey = 'unknown';
+    let answerOptionText = null;
+    let answerClass = 'unknown';
+    let agreement = 'n/a';
+
+    const signal = activePrompt.lastAnswerSignal;
+    if (signal) {
+      if (signal.type === 'digit') {
+        answerKey = signal.key;
+        answerOptionText = signal.option ? maskText(signal.option.text) : null;
+        answerClass = (signal.option && signal.option.classification) || 'unknown';
+        agreement = computeAgreement(activePrompt.decision, answerKey, answerClass);
+      } else if (signal.type === 'enter') {
+        answerKey = 'enter';
+        answerOptionText = signal.option ? maskText(signal.option.text) : null;
+        answerClass = (signal.option && signal.option.classification) || 'unknown';
+        agreement = computeAgreement(activePrompt.decision, answerKey, answerClass);
+      } else if (signal.type === 'esc') {
+        answerKey = 'esc';
+        answerOptionText = null;
+        answerClass = 'no';
+        agreement = computeAgreement(activePrompt.decision, answerKey, answerClass);
+      } else if (signal.type === 'amended') {
+        answerKey = 'amended';
+        answerOptionText = null;
+        answerClass = 'unknown';
+        agreement = computeAgreement(activePrompt.decision, answerKey, answerClass);
+      }
+    }
+
+    let answeredBy = 'unknown';
+    if (activePrompt.autoAnswered) {
+      answeredBy = 'auto';
+    } else if (activePrompt.vetoed) {
+      answeredBy = signal ? 'user' : 'vetoed';
+    } else if (signal) {
+      answeredBy = 'user';
+    }
+
+    const entry = `Prompt closed at ${durationLogStr}\nAnswered by: ${answeredBy}\n\n`;
     try {
       fs.appendFileSync(promptsLogPath, entry, 'utf8');
     } catch (err) {}
@@ -272,10 +920,21 @@ function startAgentwatch(options = {}) {
       decision: activePrompt.decision,
       rule: (activePrompt.decision && activePrompt.decision.rule) || null,
       outcome: 'closed',
-      durationSeconds
+      durationSeconds,
+      answer_key: answerKey,
+      answer_option_text: answerOptionText,
+      answer_class: answerClass,
+      agreement,
+      answered_by: answeredBy
     };
     appendHistoryEvent(closedEvent, historyPath);
 
+    activePrompt.closedAt = now;
+    if (!activePrompt.disappearedAt) {
+      activePrompt.disappearedAt = now;
+    }
+    activePrompt.closedEvent = closedEvent;
+    recentlyClosedPrompt = activePrompt;
     activePrompt = null;
   }
 
@@ -307,28 +966,70 @@ function startAgentwatch(options = {}) {
     if (isComplete) {
       const fingerprint = getPromptFingerprint(detected);
       if (!activePrompt) {
+        recentlyClosedPrompt = null;
         const decision = evaluatePrompt(detected, rules);
         activePrompt = {
           detected,
           fingerprint,
           decision,
-          shownTime: Date.now()
+          shownTime: Date.now(),
+          lastAnswerSignal: null,
+          hasFinalAnswer: false,
+          disappearedAt: null,
+          lastSelectedOptionNumber: getSelectedOptionNumberFromScreen(screenLines),
+          isAmending: false,
+          inCountdown: false,
+          vetoed: false,
+          autoAnswered: false,
+          answeredBy: null
         };
         handleLogPromptRecord(detected, decision);
         saveScreenSnapshot();
-      } else if (activePrompt.fingerprint !== fingerprint) {
-        closeActivePrompt('new_prompt');
-        const decision = evaluatePrompt(detected, rules);
-        activePrompt = {
-          detected,
-          fingerprint,
-          decision,
-          shownTime: Date.now()
-        };
-        handleLogPromptRecord(detected, decision);
-        saveScreenSnapshot();
-        if (stateTracker.currentState === 'asking') {
+
+        if (isPromptEligibleForAuto(detected, decision)) {
+          startPromptCountdown(activePrompt);
+        } else if (stateTracker.currentState === 'asking') {
           statusManager.update('asking', stateTracker.stateSince, { ...detected, decision });
+        }
+      } else if (activePrompt.fingerprint !== fingerprint) {
+        if (countdownTimer) {
+          clearInterval(countdownTimer);
+          countdownTimer = null;
+        }
+        closeActivePrompt('new_prompt');
+        recentlyClosedPrompt = null;
+        const decision = evaluatePrompt(detected, rules);
+        activePrompt = {
+          detected,
+          fingerprint,
+          decision,
+          shownTime: Date.now(),
+          lastAnswerSignal: null,
+          hasFinalAnswer: false,
+          disappearedAt: null,
+          lastSelectedOptionNumber: getSelectedOptionNumberFromScreen(screenLines),
+          isAmending: false,
+          inCountdown: false,
+          vetoed: false,
+          autoAnswered: false,
+          answeredBy: null
+        };
+        handleLogPromptRecord(detected, decision);
+        saveScreenSnapshot();
+        if (isPromptEligibleForAuto(detected, decision)) {
+          startPromptCountdown(activePrompt);
+        } else if (stateTracker.currentState === 'asking') {
+          statusManager.update('asking', stateTracker.stateSince, { ...detected, decision });
+        }
+      } else {
+        activePrompt.lastSelectedOptionNumber = getSelectedOptionNumberFromScreen(screenLines);
+        // If countdown is active, verify danger hasn't hit
+        if (activePrompt.inCountdown) {
+          const currentDecision = evaluatePrompt(detected, rules);
+          if (currentDecision && (currentDecision.danger || (currentDecision.reason && currentDecision.reason.startsWith('DANGER:')))) {
+            activePrompt.decision = currentDecision;
+            cancelCountdown('danger');
+          }
         }
       }
     } else {
@@ -357,6 +1058,30 @@ function startAgentwatch(options = {}) {
   const checkInterval = setInterval(inspectScreenForPrompts, 1000);
   if (checkInterval.unref) {
     checkInterval.unref();
+  }
+
+  // Print startup auto-accept status line before the agent starts
+  const autoAcceptStatusMsg = `agentwatch: auto-accept is ${autoAcceptEnabled ? 'ON' : 'OFF'} for this session`;
+  console.log(autoAcceptStatusMsg);
+  if (options.stdout && options.stdout.write && options.stdout !== process.stdout) {
+    options.stdout.write(autoAcceptStatusMsg + '\n');
+  }
+
+  // Print startup danger list entries count
+  const dangerCount = (rules && Array.isArray(rules.danger)) ? rules.danger.length : 0;
+  const dangerStatusMsg = `agentwatch: danger list has ${dangerCount} entries`;
+  console.log(dangerStatusMsg);
+  if (options.stdout && options.stdout.write && options.stdout !== process.stdout) {
+    options.stdout.write(dangerStatusMsg + '\n');
+  }
+
+  // Print startup warning if any option rule has allowPersist true
+  if (hasAllowPersist) {
+    const persistWarningMsg = 'agentwatch: warning: allowPersist is enabled in option rules';
+    console.warn(persistWarningMsg);
+    if (options.stdout && options.stdout.write && options.stdout !== process.stdout) {
+      options.stdout.write(persistWarningMsg + '\n');
+    }
   }
 
   // Launch child process inside PTY
@@ -388,6 +1113,7 @@ function startAgentwatch(options = {}) {
 
   // Handle output stream
   ptyProcess.onData((data) => {
+    lastChildDataReceivedTime = Date.now();
     // Pass-through to stdout
     stdout.write(data);
 
@@ -431,8 +1157,9 @@ function startAgentwatch(options = {}) {
   }
 
   // HARD SAFETY RULE:
-  // The only data ever written to the child process is the user's own keyboard input.
-  // Do not implement any other code path that writes to the child.
+  // Exactly ONE function (sendAutoAnswer) may write anything to the child other than
+  // the user's own keystrokes. It sends exactly one key: the option's key from the profile.
+  // It can only be called from the auto-accept decision path.
   if (stdin.isTTY && stdin.setRawMode) {
     stdin.setRawMode(true);
   }
@@ -441,6 +1168,10 @@ function startAgentwatch(options = {}) {
   }
 
   const onStdinData = (chunk) => {
+    lastUserKeystrokeTime = Date.now();
+    if (activePrompt && activePrompt.inCountdown) {
+      cancelCountdown('vetoed');
+    }
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     if (buf.includes(0x1d)) {
       saveScreenSnapshot();
@@ -452,11 +1183,18 @@ function startAgentwatch(options = {}) {
     }
     // Strictly forward only what the user typed
     ptyProcess.write(chunk);
+
+    // PRIVACY RULE:
+    // Extract only discrete answer signals while a complete prompt is on screen,
+    // or within 300 ms after it disappears.
+    // NEVER store, log, or display any other keystroke. Keystroke text must never reach any file.
+    handlePromptKeystroke(buf, Date.now());
   };
   stdin.on('data', onStdinData);
 
   // Clean exit handling
   ptyProcess.onExit(({ exitCode }) => {
+    if (countdownTimer) clearInterval(countdownTimer);
     if (quietTimer) clearTimeout(quietTimer);
     if (promptDebounceTimer) clearTimeout(promptDebounceTimer);
     clearInterval(checkInterval);
@@ -530,11 +1268,26 @@ function startAgentwatch(options = {}) {
     notice,
     saveScreenSnapshot,
     inspectScreenForPrompts,
+    handlePromptKeystroke,
+    closeActivePrompt,
+    sendAutoAnswer,
+    cancelCountdown,
+    isPromptEligibleForAuto,
+    checkCircuitBreaker,
+    applyCircuitBreakerTrip,
+    triggerAutoAnswer,
+    startPromptCountdown,
+    getActivePrompt: () => activePrompt,
+    getAutoAnswersHistory: () => autoAnswersHistory,
+    isAutoAcceptEnabled: () => autoAcceptEnabled,
+    setAutoAcceptEnabled: (val) => { autoAcceptEnabled = Boolean(val); statusManager.auto = autoAcceptEnabled; },
     cleanup: () => {
+      if (countdownTimer) clearInterval(countdownTimer);
       if (quietTimer) clearTimeout(quietTimer);
       if (promptDebounceTimer) clearTimeout(promptDebounceTimer);
       clearInterval(checkInterval);
       statusManager.cleanup();
+      recentlyClosedPrompt = null;
     }
   };
 }
@@ -572,6 +1325,19 @@ function logPromptRecord(detected, decision, options = {}) {
   if (decision && decision.action === 'blocked' && decision.rule) {
     entry += `Rule: ${decision.rule}\n`;
   }
+  // Record matched rule name and option text for would_approve decisions
+  if (decision && decision.action === 'would_approve' && decision.rule) {
+    entry += `Rule: ${decision.rule}\n`;
+    if (decision.optionText) {
+      entry += `Option text: ${maskText(decision.optionText)}\n`;
+    }
+  }
+  // Record matched danger entry if danger hit
+  if (decision && (decision.danger || (decision.reason && decision.reason.startsWith('DANGER:')))) {
+    const matchedEntry = decision.entry || (decision.reason.match(/DANGER:\s*matched\s*'([^']+)'/i) || [])[1] || '';
+    const maskedMatchedEntry = maskText(matchedEntry);
+    entry += `Reason: DANGER: matched '${maskedMatchedEntry}'\n`;
+  }
   entry += `Outcome: shown\n`;
 
   try {
@@ -605,9 +1371,14 @@ function logPromptRecord(detected, decision, options = {}) {
       rule: decision.rule || null,
       delay: decision.delay !== undefined ? decision.delay : null,
       optionKey: decision.optionKey || null,
-      reason: decision.reason || null
+      optionText: decision.optionText ? maskText(decision.optionText) : null,
+      reason: decision.reason ? maskText(decision.reason) : null,
+      danger_entry: decision.entry ? maskText(decision.entry) : null
     },
     rule: (decision && decision.rule) || null,
+    option_text: (decision && decision.optionText) ? maskText(decision.optionText) : null,
+    reason: decision.reason ? maskText(decision.reason) : null,
+    danger_entry: decision.entry ? maskText(decision.entry) : null,
     outcome: 'shown'
   };
   appendHistoryEvent(historyEvent, historyPath);

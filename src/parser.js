@@ -140,6 +140,23 @@ function extractPromptFromScreen(screenLines, profile) {
   };
 }
 
+/**
+ * Detects which option currently has the ">" selection marker from screen lines.
+ * Returns the 1-based option number, defaulting to 1 if no marker is found.
+ */
+function getSelectedOptionNumberFromScreen(screenLines) {
+  if (!screenLines || screenLines.length === 0) return 1;
+  for (const lineObj of screenLines) {
+    if (!lineObj || !lineObj.text) continue;
+    const match = lineObj.text.match(/^\s*>\s*(\d+)\./);
+    if (match) {
+      return parseInt(match[1], 10);
+    }
+  }
+  return 1;
+}
+
 module.exports = {
-  extractPromptFromScreen
+  extractPromptFromScreen,
+  getSelectedOptionNumberFromScreen
 };

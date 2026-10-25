@@ -20,6 +20,35 @@
   --color-asking: #dc2626;
   --color-dead: #64748b;
 
+  /* State Row & Badge Variables (Light Theme) */
+  --row-idle-bg: #f0fdf4;
+  --row-idle-hover: #dcfce7;
+  --row-idle-border: #86efac;
+  --row-idle-stripe: #16a34a;
+  --badge-idle-bg: #15803d;
+  --badge-idle-text: #ffffff;
+
+  --row-busy-bg: #fefce8;
+  --row-busy-hover: #fef9c3;
+  --row-busy-border: #fde047;
+  --row-busy-stripe: #d97706;
+  --badge-busy-bg: #b45309;
+  --badge-busy-text: #ffffff;
+
+  --row-asking-bg: #dc2626;
+  --row-asking-hover: #b91c1c;
+  --row-asking-border: #b91c1c;
+  --row-asking-stripe: #7f1d1d;
+  --badge-asking-bg: #ffffff;
+  --badge-asking-text: #991b1b;
+
+  --row-dead-bg: #f1f5f9;
+  --row-dead-hover: #e2e8f0;
+  --row-dead-border: #cbd5e1;
+  --row-dead-stripe: #64748b;
+  --badge-dead-bg: #64748b;
+  --badge-dead-text: #ffffff;
+
   --badge-yes-once-bg: #dcfce7;
   --badge-yes-once-text: #166534;
   --badge-yes-session-bg: #e0e7ff;
@@ -55,6 +84,35 @@
     --color-busy: #eab308;
     --color-asking: #ef4444;
     --color-dead: #71717a;
+
+    /* State Row & Badge Variables (Dark Theme) */
+    --row-idle-bg: #052e16;
+    --row-idle-hover: #0c3e23;
+    --row-idle-border: #166534;
+    --row-idle-stripe: #22c55e;
+    --badge-idle-bg: #166534;
+    --badge-idle-text: #f0fdf4;
+
+    --row-busy-bg: #291804;
+    --row-busy-hover: #3b2207;
+    --row-busy-border: #854d0e;
+    --row-busy-stripe: #eab308;
+    --badge-busy-bg: #a16207;
+    --badge-busy-text: #fefce8;
+
+    --row-asking-bg: #991b1b;
+    --row-asking-hover: #7f1d1d;
+    --row-asking-border: #ef4444;
+    --row-asking-stripe: #f87171;
+    --badge-asking-bg: #ffffff;
+    --badge-asking-text: #7f1d1d;
+
+    --row-dead-bg: #181c24;
+    --row-dead-hover: #232936;
+    --row-dead-border: #334155;
+    --row-dead-stripe: #64748b;
+    --badge-dead-bg: #475569;
+    --badge-dead-text: #f1f5f9;
 
     --badge-yes-once-bg: #052e16;
     --badge-yes-once-text: #86efac;
@@ -216,19 +274,117 @@ body {
   flex-direction: column;
   background-color: var(--row-bg);
   border: 1px solid var(--border-color);
+  border-left: 4px solid var(--border-color);
   border-radius: 6px;
   padding: 6px 8px;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  position: relative;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .session-row:hover {
   background-color: var(--row-hover);
 }
 
+/* IDLE ROW - Tinted green background & thick green left stripe */
+.session-row.state-idle {
+  background-color: var(--row-idle-bg);
+  border-color: var(--row-idle-border);
+  border-left: 4px solid var(--row-idle-stripe);
+}
+
+.session-row.state-idle:hover {
+  background-color: var(--row-idle-hover);
+}
+
+.session-row.state-idle .session-folder,
+.session-row.state-idle .session-duration {
+  color: #166534;
+}
+
+/* BUSY ROW - Tinted amber/yellow background & thick amber left stripe */
+.session-row.state-busy {
+  background-color: var(--row-busy-bg);
+  border-color: var(--row-busy-border);
+  border-left: 4px solid var(--row-busy-stripe);
+}
+
+.session-row.state-busy:hover {
+  background-color: var(--row-busy-hover);
+}
+
+.session-row.state-busy .session-folder,
+.session-row.state-busy .session-duration {
+  color: #854d0e;
+}
+
+/* ASKING ROW - Strong red with solid filled row, thick dark-red stripe & gentle pulse */
+.session-row.state-asking,
+.session-row.asking {
+  background-color: var(--row-asking-bg);
+  border-color: var(--row-asking-border);
+  border-left: 4px solid var(--row-asking-stripe);
+  color: #ffffff;
+  animation: asking-pulse 2.5s ease-in-out infinite;
+}
+
+.session-row.state-asking:hover,
+.session-row.asking:hover {
+  background-color: var(--row-asking-hover);
+}
+
+/* DEAD ROW - Tinted grey background & thick grey left stripe */
+.session-row.state-dead {
+  background-color: var(--row-dead-bg);
+  border-color: var(--row-dead-border);
+  border-left: 4px solid var(--row-dead-stripe);
+}
+
+.session-row.state-dead:hover {
+  background-color: var(--row-dead-hover);
+}
+
+.session-row.state-dead .session-folder,
+.session-row.state-dead .session-duration {
+  color: #475569;
+}
+
+/* Selected row highlight visible on top of state colors */
 .session-row.selected {
-  background-color: var(--row-selected);
-  border-color: var(--row-selected-border);
+  outline: 2px solid var(--row-selected-border);
+  outline-offset: -1px;
+  border-color: var(--row-selected-border) !important;
+  box-shadow: 0 0 0 2px var(--row-selected-border), 0 2px 8px rgba(56, 189, 248, 0.4) !important;
+  z-index: 2;
+}
+
+.session-row.selected::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(56, 189, 248, 0.12);
+  pointer-events: none;
+  border-radius: 5px;
+}
+
+.session-row.selected.state-idle {
+  border-left: 4px solid var(--row-idle-stripe) !important;
+}
+
+.session-row.selected.state-busy {
+  border-left: 4px solid var(--row-busy-stripe) !important;
+}
+
+.session-row.selected.state-asking,
+.session-row.selected.asking {
+  border-left: 4px solid var(--row-asking-stripe) !important;
+}
+
+.session-row.selected.state-dead {
+  border-left: 4px solid var(--row-dead-stripe) !important;
 }
 
 .session-row.dragging {
@@ -240,10 +396,120 @@ body {
   border-top: 2px solid var(--color-busy);
 }
 
-/* Red / ASKING row highlight */
-.session-row.asking {
-  background-color: var(--asking-bg);
-  border-color: var(--asking-border);
+/* High contrast readable text on ASKING solid filled row */
+.session-row.state-asking .session-name,
+.session-row.asking .session-name {
+  color: #ffffff;
+}
+
+.session-row.state-asking .session-agent,
+.session-row.asking .session-agent {
+  background-color: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+
+.session-row.state-asking .session-folder,
+.session-row.asking .session-folder {
+  color: #fee2e2;
+}
+
+.session-row.state-asking .session-duration,
+.session-row.asking .session-duration {
+  color: #fecaca;
+}
+
+.session-row.state-asking .edit-btn,
+.session-row.asking .edit-btn {
+  color: #fee2e2;
+  opacity: 0.85;
+}
+
+.session-row.state-asking .edit-btn:hover,
+.session-row.asking .edit-btn:hover {
+  color: #ffffff;
+  opacity: 1;
+  background-color: rgba(255, 255, 255, 0.25);
+}
+
+.session-row.state-asking .alert-marker,
+.session-row.asking .alert-marker {
+  color: #fef08a;
+}
+
+.session-row.state-asking .session-summary-line,
+.session-row.asking .session-summary-line {
+  color: #fee2e2;
+}
+
+.session-row.state-asking .session-prompt-line,
+.session-row.asking .session-prompt-line {
+  color: #ffffff;
+}
+
+.session-row.state-asking .prompt-cmd,
+.session-row.asking .prompt-cmd {
+  color: #ffffff;
+}
+
+.session-row.state-asking .prompt-decision,
+.session-row.asking .prompt-decision {
+  color: #fef08a;
+}
+
+.session-row.state-asking .rename-input,
+.session-row.asking .rename-input {
+  color: #0f172a;
+  background-color: #ffffff;
+  border-color: #fef08a;
+}
+
+/* Dark mode overrides for row text contrast */
+@media (prefers-color-scheme: dark) {
+  .session-row.state-idle .session-name {
+    color: #f0fdf4;
+  }
+  .session-row.state-idle .session-folder,
+  .session-row.state-idle .session-duration {
+    color: #86efac;
+  }
+
+  .session-row.state-busy .session-name {
+    color: #fefce8;
+  }
+  .session-row.state-busy .session-folder,
+  .session-row.state-busy .session-duration {
+    color: #fde047;
+  }
+
+  .session-row.state-dead .session-name {
+    color: #cbd5e1;
+  }
+  .session-row.state-dead .session-folder,
+  .session-row.state-dead .session-duration {
+    color: #94a3b8;
+  }
+}
+
+/* Subtle gentle pulse for ASKING state */
+@keyframes asking-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
+  }
+  50% {
+    box-shadow: 0 0 8px 2px rgba(220, 38, 38, 0.45);
+  }
+}
+
+/* Turn off pulse and animations when reduce motion setting is on */
+@media (prefers-reduced-motion: reduce) {
+  .session-row.state-asking,
+  .session-row.asking {
+    animation: none !important;
+  }
+  .state-badge.busy .state-icon,
+  .state-badge.busy .spinner {
+    animation: none !important;
+  }
 }
 
 .session-main-line {
@@ -265,27 +531,61 @@ body {
   visibility: hidden;
 }
 
-/* State Badge */
+/* State Badge - Filled badge for state label */
 .state-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
-  padding: 2px 5px;
+  padding: 2px 7px;
   border-radius: 4px;
   white-space: nowrap;
+  letter-spacing: 0.02em;
 }
 
-.state-badge.idle { color: var(--color-idle); }
-.state-badge.busy { color: var(--color-busy); }
-.state-badge.asking { color: var(--color-asking); }
-.state-badge.dead { color: var(--color-dead); }
+.state-badge.idle {
+  background-color: var(--badge-idle-bg);
+  color: var(--badge-idle-text);
+}
 
+.state-badge.busy {
+  background-color: var(--badge-busy-bg);
+  color: var(--badge-busy-text);
+}
+
+.state-badge.asking {
+  background-color: var(--badge-asking-bg);
+  color: var(--badge-asking-text);
+}
+
+.state-badge.dead {
+  background-color: var(--badge-dead-bg);
+  color: var(--badge-dead-text);
+}
+
+.state-icon,
 .state-circle {
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1;
+  display: inline-block;
+}
+
+/* Animated spinner for BUSY state */
+.state-badge.busy .state-icon,
+.state-badge.busy .spinner {
+  animation: state-spin 1.2s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes state-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .session-info {
@@ -733,6 +1033,18 @@ details[open] .past-agents-summary::before {
   color: var(--text-muted);
 }
 
+.history-summary {
+  background-color: var(--row-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
 .card-footer {
   display: flex;
   justify-content: space-between;
@@ -741,6 +1053,14 @@ details[open] .past-agents-summary::before {
   margin-top: 3px;
   padding-top: 4px;
   border-top: 1px dotted var(--border-color);
+  gap: 8px;
+}
+
+.card-decision-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .card-decision {
@@ -748,10 +1068,32 @@ details[open] .past-agents-summary::before {
   color: var(--color-busy);
 }
 
+.agreement-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.agreement-badge.badge-agrees {
+  background-color: var(--badge-yes-once-bg);
+  color: var(--badge-yes-once-text);
+  border: 1px solid rgba(134, 239, 172, 0.3);
+}
+
+.agreement-badge.badge-differs {
+  background-color: var(--badge-no-bg);
+  color: var(--badge-no-text);
+  border: 1px solid rgba(254, 202, 202, 0.3);
+}
+
 .card-answer {
   color: var(--text-muted);
   font-style: italic;
   font-size: 10px;
+  text-align: right;
 }
 
 /* Load Older Button */
@@ -844,4 +1186,48 @@ details[open] .past-agents-summary::before {
   color: var(--text-primary);
   cursor: pointer;
   outline: none;
+}
+
+.auto-pause-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  user-select: none;
+  margin-right: 8px;
+}
+
+.session-auto-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background-color: #0284c7;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+}
+
+.session-auto-badge.hidden {
+  display: none;
+}
+
+.session-persist-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background-color: #b91c1c;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+}
+
+.session-persist-badge.hidden {
+  display: none;
+}
+
+.state-badge.countdown {
+  background-color: #7c3aed;
+  color: #ffffff;
 }

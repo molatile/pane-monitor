@@ -19,6 +19,10 @@
         <button id="tab-btn-settings" class="tab-btn" type="button">Settings</button>
       </div>
       <div class="header-right">
+        <label class="auto-pause-toggle" title="Pause auto-accept for all agents">
+          <input type="checkbox" id="pause-auto-checkbox">
+          <span class="pause-auto-label">⏸ Pause auto</span>
+        </label>
         <label class="pin-toggle" title="Toggle Always on Top">
           <input type="checkbox" id="always-on-top-checkbox">
           <span class="pin-label">📌 Pin</span>
@@ -57,6 +61,7 @@
           <button id="clear-history-btn" class="clear-history-btn" type="button">Clear this agent's history</button>
         </div>
         <div id="history-content" class="history-content">
+          <div id="history-summary" class="history-summary" style="display: none;"></div>
           <div id="history-placeholder" class="history-placeholder">
             Select an agent to see its history
           </div>
@@ -85,6 +90,14 @@
             <div class="setting-text">
               <span class="setting-label">Pin on top</span>
               <span class="setting-desc">Keep the window always above other windows</span>
+            </div>
+          </label>
+
+          <label class="setting-item">
+            <input type="checkbox" id="setting-auto-paused">
+            <div class="setting-text">
+              <span class="setting-label">Pause auto-accept</span>
+              <span class="setting-desc">Globally pause auto-accept for all sessions</span>
             </div>
           </label>
 

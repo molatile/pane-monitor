@@ -403,4 +403,193 @@ console.log('Running unit tests...\n');
   console.log('✓ Test 13: Multiple background lines counted correctly and dashboard summary display passed');
 }
 
+// Test 14: Starter allow list & strict matching rules
+{
+  const { evaluatePrompt, containsForbiddenShellSyntax } = require('../src/rules');
+
+  function makePrompt(cmdSpaced, cmdCompact, options) {
+    return {
+      commandSpaced: cmdSpaced,
+      commandCompact: cmdCompact || cmdSpaced.replace(/\s+/g, ''),
+      question: 'Run this command?',
+      options: options || [
+        { key: '1', number: 1, text: 'Yes, run command', classification: 'yes_once' },
+        { key: '2', number: 2, text: 'No, cancel', classification: 'no' }
+      ]
+    };
+  }
+
+  // 1. Tier 1 allowed commands
+  const allowedCommands = [
+    { cmd: 'git status', rule: 'git-readonly' },
+    { cmd: 'git diff', rule: 'git-readonly' },
+    { cmd: 'git log', rule: 'git-readonly' },
+    { cmd: 'git branch', rule: 'git-readonly' },
+    { cmd: 'git log --oneline', rule: 'git-readonly' },
+    { cmd: 'git log -n 5', rule: 'git-readonly' },
+    { cmd: 'git diff --stat', rule: 'git-readonly' },
+    { cmd: 'git branch -a', rule: 'git-readonly' },
+    { cmd: 'git branch -r', rule: 'git-readonly' },
+    { cmd: 'git diff HEAD~1', rule: 'git-readonly' },
+    { cmd: 'ls', rule: 'file-list' },
+    { cmd: 'dir', rule: 'file-list' },
+    { cmd: 'Get-ChildItem', rule: 'file-list' },
+    { cmd: 'pwd', rule: 'file-list' },
+    { cmd: 'Get-Location', rule: 'file-list' },
+    { cmd: 'ls src', rule: 'file-list' },
+    { cmd: 'ls ./src', rule: 'file-list' },
+    { cmd: 'dir src\\gui', rule: 'file-list' },
+    { cmd: 'dir .\\src', rule: 'file-list' },
+    { cmd: 'ls package.json', rule: 'file-list' },
+    { cmd: 'ls -la', rule: 'file-list' },
+    { cmd: 'npm --version', rule: 'version-check' },
+    { cmd: 'node --version', rule: 'version-check' },
+    { cmd: 'npm -v', rule: 'version-check' },
+    { cmd: 'node -v', rule: 'version-check' },
+    { cmd: 'echo hello', rule: 'echo-safe' },
+    { cmd: 'echo "hello world"', rule: 'echo-safe' },
+    { cmd: 'echo fast-test-command', rule: 'echo-safe' }
+  ];
+
+  for (const { cmd, rule } of allowedCommands) {
+    const d = evaluatePrompt(makePrompt(cmd));
+    assert.strictEqual(d.action, 'would_approve', `Expected would_approve for "${cmd}", got "${d.action}"`);
+    assert.strictEqual(d.rule, rule, `Expected rule "${rule}" for "${cmd}", got "${d.rule}"`);
+    assert.strictEqual(d.delay, 3, `Expected delay 3 for "${cmd}"`);
+    assert.strictEqual(d.optionKey, '1');
+    assert.strictEqual(d.log, `Dry-run: would approve option 1 after 3s (rule: ${rule})`);
+  }
+
+  // 2. Commands with shell syntax appended are NOT allowed
+  const injections = ['; rm -rf x', '&& whoami', '| sh', '> file', '$(whoami)'];
+  for (const { cmd } of allowedCommands) {
+    for (const inj of injections) {
+      const maliciousCmd = `${cmd} ${inj}`;
+      const d = evaluatePrompt(makePrompt(maliciousCmd));
+      assert.notStrictEqual(d.action, 'would_approve', `Malicious command "${maliciousCmd}" must NOT be would_approve`);
+      assert(d.action === 'blocked' || d.action === 'needs_user');
+    }
+  }
+
+  // 3. Echo specific tests
+  assert.strictEqual(evaluatePrompt(makePrompt('echo hello')).action, 'would_approve');
+  const dEchoEnv = evaluatePrompt(makePrompt('echo hello >> .env'));
+  assert.strictEqual(dEchoEnv.action, 'blocked');
+  assert.strictEqual(dEchoEnv.rule, '.env');
+  const dEchoVar = evaluatePrompt(makePrompt('echo $env:USERPROFILE'));
+  assert.strictEqual(dEchoVar.action, 'needs_user');
+  assert.strictEqual(dEchoVar.reason, 'forbidden shell syntax');
+
+  // 4. Git status vs git push --force
+  assert.strictEqual(evaluatePrompt(makePrompt('git status')).action, 'would_approve');
+  const dPush = evaluatePrompt(makePrompt('git push --force'));
+  assert.strictEqual(dPush.action, 'blocked');
+  assert.strictEqual(dPush.rule, 'git push --force');
+
+  // 5. Commands matching ONLY when compacted (whitespace removed) must NOT be allowed
+  const compactOnly = [
+    { spaced: 'g i t s t a t u s', compact: 'gitstatus' },
+    { spaced: 'l s', compact: 'ls' },
+    { spaced: 'd i r', compact: 'dir' },
+    { spaced: 'n p m - - v e r s i o n', compact: 'npm--version' },
+    { spaced: 'e c h o h e l l o', compact: 'echohello' }
+  ];
+  for (const c of compactOnly) {
+    const d = evaluatePrompt(makePrompt(c.spaced, c.compact));
+    assert.strictEqual(d.action, 'needs_user', `Spaced command "${c.spaced}" must NOT be approved`);
+  }
+
+  // 6. Tier 2 commands are needs_user while tier 2 is disabled
+  const tier2Commands = ['npm run build', 'npm run lint', 'npm run dev', 'npm test'];
+  for (const cmd of tier2Commands) {
+    const d = evaluatePrompt(makePrompt(cmd));
+    assert.strictEqual(d.action, 'needs_user', `Tier 2 command "${cmd}" must be needs_user while disabled`);
+    assert.strictEqual(d.reason, 'no allow rule matched');
+  }
+
+  // 7. Sensitive targets blocked by deny list
+  const sensitiveCommands = [
+    { cmd: 'git diff .env', expectedRule: '.env' },
+    { cmd: 'ls settings.json', expectedRule: 'settings.json' },
+    { cmd: 'cat ~/.ssh/id_rsa', expectedRule: '.ssh' },
+    { cmd: 'echo my credentials', expectedRule: 'credentials' }
+  ];
+  for (const { cmd, expectedRule } of sensitiveCommands) {
+    const d = evaluatePrompt(makePrompt(cmd));
+    assert.strictEqual(d.action, 'blocked', `Expected blocked for "${cmd}"`);
+    assert.strictEqual(d.rule, expectedRule, `Expected rule "${expectedRule}" for "${cmd}"`);
+  }
+
+  // 8. Path traversal and absolute paths rejected
+  const invalidPaths = ['ls ..', 'ls ../', 'ls ..\\src', 'ls /', 'ls /etc', 'ls \\Windows', 'ls C:\\Users', 'dir D:\\temp'];
+  for (const cmd of invalidPaths) {
+    const d = evaluatePrompt(makePrompt(cmd));
+    assert.strictEqual(d.action, 'needs_user', `Invalid path command "${cmd}" must NOT be approved`);
+  }
+
+  // 9. Option eligibility: options 2 and 3 never eligible
+  const dSession = evaluatePrompt(makePrompt('git status', null, [
+    { key: '2', number: 2, text: 'Yes, allow for session', classification: 'yes_session' },
+    { key: '4', number: 4, text: 'No, cancel', classification: 'no' }
+  ]));
+  assert.strictEqual(dSession.action, 'needs_user');
+  assert.strictEqual(dSession.reason, 'no eligible yes_once option');
+
+  // 10. Safety review disallowed commands (never would_approve)
+  const reviewDisallowed = [
+    'node -e "console.log(1)"',
+    'node script.js',
+    'npm install lodash',
+    'npx something',
+    'npm run build',
+    'git branch -D main',
+    'git branch -d feature',
+    'git branch newbranch',
+    'git diff --output=out.txt',
+    'git log --output=x.txt',
+    'Get-ChildItem -Path . | Remove-Item',
+    'dir > out.txt'
+  ];
+  for (const cmd of reviewDisallowed) {
+    const d = evaluatePrompt(makePrompt(cmd));
+    assert.notStrictEqual(d.action, 'would_approve', `Command "${cmd}" must not be would_approve`);
+    assert(d.action === 'needs_user' || d.action === 'blocked');
+  }
+
+  // 11. Git branch listing forms vs non-listing forms
+  const allowedBranches = ['git branch', 'git branch -a', 'git branch -r', 'git branch --list', 'git branch -v'];
+  for (const cmd of allowedBranches) {
+    const d = evaluatePrompt(makePrompt(cmd));
+    assert.strictEqual(d.action, 'would_approve');
+    assert.strictEqual(d.rule, 'git-readonly');
+  }
+  const rejectedBranches = ['git branch -D main', 'git branch -d feature', 'git branch newbranch', 'git branch -m old new', 'git branch --delete foo'];
+  for (const cmd of rejectedBranches) {
+    const d = evaluatePrompt(makePrompt(cmd));
+    assert.strictEqual(d.action, 'needs_user');
+  }
+
+  // 12. Git diff and git log reject --output, -o, -O, --output-directory
+  const rejectedDiffLog = [
+    'git diff --output=out.txt',
+    'git diff --output out.txt',
+    'git diff -o out.txt',
+    'git diff -o=out.txt',
+    'git diff -O orderfile',
+    'git diff --output-directory=out',
+    'git log --output=x.txt',
+    'git log --output x.txt',
+    'git log -o x.txt',
+    'git log -o=x.txt',
+    'git log -O x.txt',
+    'git log --output-directory=out'
+  ];
+  for (const cmd of rejectedDiffLog) {
+    const d = evaluatePrompt(makePrompt(cmd));
+    assert.strictEqual(d.action, 'needs_user');
+  }
+
+  console.log('✓ Test 14: Starter allow list & strict matching rules verified');
+}
+
 console.log('\nAll unit tests passed successfully!');

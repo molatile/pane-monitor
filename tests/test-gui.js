@@ -310,10 +310,26 @@ console.log('\n--- Test Group 5: File Access Safety & Zero Network Calls ---');
   const cli1 = parseArgs(['gui']);
   assert.strictEqual(cli1.command, 'gui');
   assert.strictEqual(cli1.quiet, false);
+  assert.strictEqual(cli1.restart, false);
 
   const cli2 = parseArgs(['gui', '--quiet']);
   assert.strictEqual(cli2.command, 'gui');
   assert.strictEqual(cli2.quiet, true);
+  assert.strictEqual(cli2.restart, false);
+
+  const cli3 = parseArgs(['gui', '--restart']);
+  assert.strictEqual(cli3.command, 'gui');
+  assert.strictEqual(cli3.quiet, false);
+  assert.strictEqual(cli3.restart, true);
+
+  const cli4 = parseArgs(['gui', '--quiet', '--restart']);
+  assert.strictEqual(cli4.command, 'gui');
+  assert.strictEqual(cli4.quiet, true);
+  assert.strictEqual(cli4.restart, true);
+
+  const cli5 = parseArgs(['--restart', 'gui']);
+  assert.strictEqual(cli5.command, 'gui');
+  assert.strictEqual(cli5.restart, true);
 
   console.log('✓ Test Group 5 passed: Zero child input, forbidden files not accessed, zero network calls, and CLI args verified');
 }

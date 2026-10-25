@@ -3,15 +3,19 @@ const path = require('path');
 const os = require('os');
 const { maskText } = require('./masker');
 
-const AGENTWATCH_DIR = path.join(os.homedir(), '.agentwatch');
+const AGENTWATCH_DIR = process.env.AGENTWATCH_DIR || path.join(os.homedir(), '.agentwatch');
 const HISTORY_FILE = path.join(AGENTWATCH_DIR, 'history.jsonl');
 
 /**
  * Ensures the ~/.agentwatch directory exists.
  */
 function ensureAgentwatchDir() {
-  if (!fs.existsSync(AGENTWATCH_DIR)) {
-    fs.mkdirSync(AGENTWATCH_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(AGENTWATCH_DIR)) {
+      fs.mkdirSync(AGENTWATCH_DIR, { recursive: true });
+    }
+  } catch (err) {
+    // Non-fatal
   }
 }
 
@@ -43,15 +47,15 @@ function maskObject(obj) {
 function appendHistoryEvent(event, customFilePath) {
   const targetPath = customFilePath || HISTORY_FILE;
   const targetDir = path.dirname(targetPath);
-  if (!fs.existsSync(targetDir)) {
-    fs.mkdirSync(targetDir, { recursive: true });
-  }
-
-  // Mask all fields before writing to disk
-  const maskedEvent = maskObject(event);
-  const line = JSON.stringify(maskedEvent) + '\n';
-
   try {
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    // Mask all fields before writing to disk
+    const maskedEvent = maskObject(event);
+    const line = JSON.stringify(maskedEvent) + '\n';
+
     fs.appendFileSync(targetPath, line, 'utf8');
   } catch (err) {
     // Non-fatal logging error
@@ -416,6 +420,9 @@ function formatPlainDecision(decision) {
   if (!decision) return 'Needs you';
   if (typeof decision === 'string') return decision;
   if (typeof decision === 'object') {
+    if (decision.reason && decision.reason.startsWith('DANGER:')) {
+      return decision.reason;
+    }
     if (decision.action === 'would_approve') {
       const opt = decision.optionKey || '1';
       const delay = decision.delay !== undefined ? decision.delay : 3;
@@ -451,6 +458,101 @@ function getClassificationLabel(classification) {
     default:
       return classification || 'unknown';
   }
+}
+
+/**
+ * Computes agreement between dry-run decision and user answer:
+ * - "agrees" if the dry-run decision would_approve and the user chose yes_once,
+ *   or if the decision was blocked or needs_user and the user chose no or did not choose yes_once
+ * - "differs" otherwise
+ * - "n/a" if answer unknown
+ *
+ * @param {Object|string} decision
+ * @param {string|number} answerKey
+ * @param {string} answerClass
+ * @returns {'agrees'|'differs'|'n/a'}
+ */
+function computeAgreement(decision, answerKey, answerClass) {
+  if (answerKey === 'unknown' || !answerKey) {
+    return 'n/a';
+  }
+
+  const action = (decision && typeof decision === 'object') ? decision.action : (typeof decision === 'string' ? decision : null);
+
+  if (action === 'would_approve') {
+    return answerClass === 'yes_once' ? 'agrees' : 'differs';
+  }
+
+  if (action === 'blocked' || action === 'needs_user') {
+    if (answerClass === 'no' || answerClass !== 'yes_once') {
+      return 'agrees';
+    }
+    return 'differs';
+  }
+
+  return 'n/a';
+}
+
+/**
+ * Formats user answer for history card display.
+ * E.g.: "You chose: 1. Yes, run command (yes once)" or "You cancelled" or "You amended" or "Answer: not detected"
+ * If answer_key is undefined (older pre-Stage-3b events), returns "Answer: not recorded".
+ *
+ * @param {Object} prompt
+ * @returns {string}
+ */
+function formatPromptAnswer(prompt) {
+  if (!prompt || (prompt.answer_key === undefined && !prompt.answered_by)) {
+    return 'Answer: not recorded';
+  }
+  if (prompt.answered_by === 'vetoed' || prompt.answeredBy === 'vetoed') {
+    return 'Cancelled (vetoed)';
+  }
+  if (prompt.answer_key === 'unknown') {
+    return 'Answer: not detected';
+  }
+  if (prompt.answer_key === 'esc') {
+    return 'You cancelled';
+  }
+  if (prompt.answer_key === 'amended') {
+    return 'You amended';
+  }
+
+  const prefix = (prompt.answered_by === 'auto' || prompt.answeredBy === 'auto')
+    ? 'Auto-accepted'
+    : 'You chose';
+
+  // Digit or Enter: an option was chosen
+  let chosenOpt = null;
+  if (Array.isArray(prompt.options)) {
+    if (typeof prompt.answer_key === 'number' || (typeof prompt.answer_key === 'string' && /^\d+$/.test(prompt.answer_key))) {
+      chosenOpt = prompt.options.find(o => String(o.number) === String(prompt.answer_key) || String(o.key) === String(prompt.answer_key));
+    } else if (prompt.answer_key === 'enter') {
+      if (prompt.answer_option_text) {
+        chosenOpt = prompt.options.find(o => o.text === prompt.answer_option_text);
+      }
+      if (!chosenOpt && prompt.answer_class) {
+        chosenOpt = prompt.options.find(o => o.classification === prompt.answer_class);
+      }
+      if (!chosenOpt) {
+        chosenOpt = prompt.options[0];
+      }
+    }
+  }
+
+  if (chosenOpt) {
+    const num = chosenOpt.number || chosenOpt.key || '1';
+    const text = chosenOpt.text || prompt.answer_option_text || '';
+    const label = chosenOpt.label || getClassificationLabel(chosenOpt.classification || prompt.answer_class);
+    return `${prefix}: ${num}. ${text} (${label})`;
+  }
+
+  if (prompt.answer_option_text) {
+    const label = getClassificationLabel(prompt.answer_class);
+    return `${prefix}: ${prompt.answer_option_text} (${label})`;
+  }
+
+  return 'Answer: not detected';
 }
 
 /**
@@ -544,7 +646,11 @@ function groupHistoryBySession(events = [], activeSessionIds = new Set()) {
             decision: ev.decision,
             plainDecision: formatPlainDecision(ev.decision),
             durationSeconds: (ev.durationSeconds !== undefined && ev.durationSeconds !== 'closed: unknown') ? ev.durationSeconds : null,
-            answer: 'Answer: not recorded'
+            answer: 'Answer: not recorded',
+            answer_key: ev.answer_key !== undefined ? ev.answer_key : undefined,
+            answer_option_text: ev.answer_option_text !== undefined ? ev.answer_option_text : null,
+            answer_class: ev.answer_class !== undefined ? ev.answer_class : undefined,
+            agreement: ev.agreement !== undefined ? ev.agreement : undefined
           });
         } else {
           const existing = promptsMap.get(pKey);
@@ -553,6 +659,18 @@ function groupHistoryBySession(events = [], activeSessionIds = new Set()) {
           }
           if (ev.type === 'prompt' && ev.time) {
             existing.time = ev.time;
+          }
+          if (ev.answer_key !== undefined) {
+            existing.answer_key = ev.answer_key;
+          }
+          if (ev.answer_option_text !== undefined) {
+            existing.answer_option_text = ev.answer_option_text;
+          }
+          if (ev.answer_class !== undefined) {
+            existing.answer_class = ev.answer_class;
+          }
+          if (ev.agreement !== undefined) {
+            existing.agreement = ev.agreement;
           }
         }
       }
@@ -567,7 +685,8 @@ function groupHistoryBySession(events = [], activeSessionIds = new Set()) {
       }
       return {
         ...p,
-        durationStr
+        durationStr,
+        answer: formatPromptAnswer(p)
       };
     });
 
@@ -606,5 +725,7 @@ module.exports = {
   formatSessionLength,
   formatPlainDecision,
   getClassificationLabel,
-  groupHistoryBySession
+  groupHistoryBySession,
+  computeAgreement,
+  formatPromptAnswer
 };

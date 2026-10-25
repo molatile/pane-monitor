@@ -39,7 +39,7 @@ function formatDuration(sinceIso, nowMs = Date.now()) {
  * Returns the state light representation.
  * Circle character + state word so it still reads without color.
  */
-function getStateLight(state, isDead, useColor = true) {
+function getStateLight(state, isDead, useColor = true, countdown = null, isAuto = false, rule = null) {
   if (isDead || state === 'dead') {
     return {
       plain: '● DEAD  ',
@@ -62,6 +62,16 @@ function getStateLight(state, isDead, useColor = true) {
         plain: '● ASKING',
         formatted: useColor ? '\x1b[31;1m● ASKING\x1b[0m' : '● ASKING'
       };
+    case 'countdown': {
+      const secs = (countdown !== null && countdown !== undefined) ? `${countdown}s` : '';
+      const ruleLabel = rule ? ` (${rule})` : '';
+      const autoLabel = isAuto ? ' (auto)' : '';
+      const plain = `● COUNTDOWN ${secs}${ruleLabel}${autoLabel}`.trim();
+      const formatted = useColor
+        ? `\x1b[35;1m● COUNTDOWN ${secs}\x1b[0m${rule ? ` \x1b[33m(${rule})\x1b[0m` : ''}${isAuto ? ' \x1b[36m(auto)\x1b[0m' : ''}`.trim()
+        : plain;
+      return { plain, formatted };
+    }
     default:
       return {
         plain: '● UNKNOWN',
@@ -80,7 +90,16 @@ function getSessionSummary(session) {
   if (session.hasProfile === false) {
     return 'no profile';
   }
+  if (session.state === 'countdown') {
+    const secs = (session.countdown !== undefined && session.countdown !== null) ? `${session.countdown}s` : '';
+    const rule = session.rule || (session.prompt && session.prompt.rule);
+    const ruleSuffix = rule ? ` (${rule})` : '';
+    return `Auto-accepting in ${secs || '3s'}${ruleSuffix}`;
+  }
   if (session.state === 'asking') {
+    if (session.prompt && session.prompt.decision && session.prompt.decision.startsWith('DANGER:')) {
+      return session.prompt.decision;
+    }
     return (session.prompt && session.prompt.question) || 'Permission requested';
   }
   const bgCount = session.backgroundTasks || session.backgroundTaskCount || 0;
@@ -135,32 +154,45 @@ function renderDashboardLines(options = {}) {
     sessions.forEach((session, idx) => {
       const isSelected = idx === selectedIndex;
       const isAsking = session.state === 'asking' && !session.isDead;
+      const isCountdown = session.state === 'countdown' && !session.isDead;
+      const isPromptActive = (isAsking || isCountdown) && !session.isDead;
 
       // Selection marker
       const selStr = isSelected
         ? (useColor ? '\x1b[1;36m>\x1b[0m ' : '> ')
         : '  ';
 
-      // Red state visible marker [!]
+      // Alert marker: [!] for asking, [~] for countdown
       const alertMarker = isAsking
         ? (useColor ? '\x1b[1;31m[!]\x1b[0m ' : '[!] ')
-        : '    ';
+        : (isCountdown ? (useColor ? '\x1b[1;35m[~]\x1b[0m ' : '[~] ') : '    ');
 
       // Light + State word
-      const light = getStateLight(session.state, session.isDead, useColor);
+      const ruleName = session.rule || (session.prompt && session.prompt.rule);
+      const light = getStateLight(session.state, session.isDead, useColor, session.countdown, session.auto, ruleName);
+
+      // Clear AUTO ON marker
+      const autoMarker = session.auto
+        ? (useColor ? '\x1b[1;36m[AUTO ON]\x1b[0m ' : '[AUTO ON] ')
+        : '';
+
+      // PERSIST ALLOWED marker
+      const persistMarker = session.allowPersist
+        ? (useColor ? '\x1b[1;31m[PERSIST ALLOWED]\x1b[0m ' : '[PERSIST ALLOWED] ')
+        : '';
 
       // Name, Agent, Folder, Duration, Summary
       const name = padRight(getDisplayName(config, session), 16);
-      const agent = padRight(session.agent, 8);
+      const agent = padRight(session.agent + (session.auto ? ' (auto)' : ''), 10);
       const folder = padRight(session.folder, 16);
       const duration = padRight(formatDuration(session.stateSince, nowMs), 10);
       const summary = getSessionSummary(session);
 
-      const rowText = `${selStr}${alertMarker}${light.formatted}  ${name}  ${agent}  ${folder}  ${duration}  ${summary}`;
+      const rowText = `${selStr}${alertMarker}${light.formatted}  ${autoMarker}${persistMarker}${name}  ${agent}  ${folder}  ${duration}  ${summary}`;
       lines.push(rowText);
 
-      // Second line for ASKING state: masked command and dry-run decision
-      if (isAsking && session.prompt) {
+      // Second line for ASKING or COUNTDOWN state: masked command and dry-run decision
+      if (isPromptActive && session.prompt) {
         const cmd = session.prompt.command || 'unknown command';
         const decision = session.prompt.decision || 'needs you';
         const line2 = useColor

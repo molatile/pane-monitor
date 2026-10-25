@@ -21,6 +21,7 @@ let historyNextOffset = 0;
 // DOM references
 const countBadge = document.getElementById('agent-count-badge');
 const pinCheckbox = document.getElementById('always-on-top-checkbox');
+const pauseCheckbox = document.getElementById('pause-auto-checkbox');
 const container = document.getElementById('sessions-container');
 
 // Tabs
@@ -39,12 +40,14 @@ const historyHeader = document.getElementById('history-header');
 const historyAgentName = document.getElementById('history-agent-name');
 const clearHistoryBtn = document.getElementById('clear-history-btn');
 const historyPlaceholder = document.getElementById('history-placeholder');
+const historySummary = document.getElementById('history-summary');
 const historyGroups = document.getElementById('history-groups');
 const loadOlderContainer = document.getElementById('load-older-container');
 const loadOlderBtn = document.getElementById('load-older-btn');
 
 // Settings Controls
 const settingAutoOpen = document.getElementById('setting-auto-open');
+const settingAutoPaused = document.getElementById('setting-auto-paused');
 const settingPinTop = document.getElementById('setting-pin-top');
 const settingNotifications = document.getElementById('setting-notifications');
 const settingTimeFormat = document.getElementById('setting-time-format');
@@ -139,6 +142,9 @@ function formatPlainDecision(decision) {
   if (!decision) return 'Needs you';
   if (typeof decision === 'string') return decision;
   if (typeof decision === 'object') {
+    if (decision.reason && decision.reason.startsWith('DANGER:')) {
+      return decision.reason;
+    }
     if (decision.action === 'would_approve') {
       const opt = decision.optionKey || '1';
       const delay = decision.delay !== undefined ? decision.delay : 3;
@@ -434,14 +440,31 @@ function render(data) {
   }
 }
 
+function getStateIcon(state) {
+  switch (state) {
+    case 'idle':
+      return '✓';
+    case 'busy':
+      return '⟳';
+    case 'asking':
+      return '!';
+    case 'dead':
+      return '✕';
+    default:
+      return '●';
+  }
+}
+
 function createRow(session) {
   const key = session.sessionKey;
   const isAsking = Boolean(session.isAsking);
+  const state = String(session.state || (isAsking ? 'asking' : 'idle')).toLowerCase();
   const isSelected = selectedAgentKey === key;
 
   const row = document.createElement('div');
-  row.className = `session-row ${isAsking ? 'asking' : ''} ${isSelected ? 'selected' : ''}`.trim();
+  row.className = `session-row state-${state} ${isAsking ? 'asking' : ''} ${isSelected ? 'selected' : ''}`.trim();
   row.dataset.sessionKey = key;
+  row.dataset.state = state;
   row.draggable = true;
 
   // Clicking row selects agent to show its history, or unselects if already selected
@@ -458,20 +481,25 @@ function createRow(session) {
   const mainLine = document.createElement('div');
   mainLine.className = 'session-main-line';
 
+  const isCountdown = state === 'countdown';
+  const isPromptActive = (isAsking || isCountdown) && !session.isDead;
+
   // Alert marker
   const alertMarker = document.createElement('span');
-  alertMarker.className = `alert-marker ${isAsking ? '' : 'hidden'}`;
-  alertMarker.textContent = '[!]';
+  alertMarker.className = `alert-marker ${isPromptActive ? '' : 'hidden'}`;
+  alertMarker.textContent = isCountdown ? '[~]' : '[!]';
 
   // State badge
   const stateBadge = document.createElement('span');
-  stateBadge.className = `state-badge ${session.state}`;
+  stateBadge.className = `state-badge ${state}`;
   const stateCircle = document.createElement('span');
-  stateCircle.className = 'state-circle';
-  stateCircle.textContent = '●';
+  stateCircle.className = `state-icon state-circle ${state === 'busy' ? 'spinner' : ''}`;
+  stateCircle.textContent = getStateIcon(state);
   const stateWord = document.createElement('span');
   stateWord.className = 'state-word';
-  stateWord.textContent = (session.state || '').toUpperCase();
+  const ruleName = session.rule || (session.prompt && session.prompt.rule);
+  const ruleText = (isCountdown && ruleName) ? ` (${ruleName})` : '';
+  stateWord.textContent = isCountdown ? ('COUNTDOWN' + (session.countdown ? ` ${session.countdown}s` : '') + ruleText) : state.toUpperCase();
   stateBadge.appendChild(stateCircle);
   stateBadge.appendChild(document.createTextNode(' '));
   stateBadge.appendChild(stateWord);
@@ -506,10 +534,22 @@ function createRow(session) {
     startRename(key);
   });
 
+  // AUTO ON marker badge
+  const autoEl = document.createElement('span');
+  autoEl.className = `session-auto-badge ${session.auto ? '' : 'hidden'}`;
+  autoEl.textContent = 'AUTO ON';
+  autoEl.title = 'Auto-accept is enabled';
+
+  // PERSIST ALLOWED marker badge
+  const persistEl = document.createElement('span');
+  persistEl.className = `session-persist-badge ${session.allowPersist ? '' : 'hidden'}`;
+  persistEl.textContent = 'PERSIST ALLOWED';
+  persistEl.title = 'Rules allow persisting permission';
+
   // Agent badge
   const agentEl = document.createElement('span');
   agentEl.className = 'session-agent';
-  agentEl.textContent = session.agent || 'agent';
+  agentEl.textContent = (session.agent || 'agent') + (session.auto ? ' (auto)' : '');
   agentEl.title = `Agent: ${session.agent || 'agent'}`;
 
   // Folder
@@ -525,6 +565,8 @@ function createRow(session) {
 
   info.appendChild(nameEl);
   info.appendChild(editBtn);
+  info.appendChild(autoEl);
+  info.appendChild(persistEl);
   info.appendChild(agentEl);
   info.appendChild(folderEl);
   info.appendChild(durationEl);
@@ -546,10 +588,10 @@ function createRow(session) {
   }
   row.appendChild(summaryEl);
 
-  // ASKING prompt line
+  // ASKING / COUNTDOWN prompt line
   const promptEl = document.createElement('div');
   promptEl.className = 'session-prompt-line';
-  if (isAsking && session.prompt) {
+  if (isPromptActive && session.prompt) {
     const cmdText = session.prompt.command || 'unknown command';
     const decisionText = session.prompt.decision || 'needs you';
     promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-cmd">${escapeHtml(cmdText)}</span> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
@@ -568,10 +610,13 @@ function createRow(session) {
     alertMarker,
     stateBadge,
     stateCircle,
+    stateIcon: stateCircle,
     stateWord,
     info,
     nameEl,
     editBtn,
+    autoEl,
+    persistEl,
     agentEl,
     folderEl,
     durationEl,
@@ -583,17 +628,29 @@ function createRow(session) {
 
 function updateRow(entry, session) {
   const isAsking = Boolean(session.isAsking);
+  const state = String(session.state || (isAsking ? 'asking' : 'idle')).toLowerCase();
+  const isCountdown = state === 'countdown';
+  const isPromptActive = (isAsking || isCountdown) && !session.isDead;
   const isDragging = draggedKey === session.sessionKey;
   const isSelected = selectedAgentKey === session.sessionKey;
 
-  entry.row.className = `session-row ${isAsking ? 'asking' : ''} ${isDragging ? 'dragging' : ''} ${isSelected ? 'selected' : ''}`.trim();
+  entry.row.className = `session-row state-${state} ${isAsking ? 'asking' : ''} ${isDragging ? 'dragging' : ''} ${isSelected ? 'selected' : ''}`.trim();
+  entry.row.dataset.state = state;
 
   // Alert marker
-  entry.alertMarker.className = `alert-marker ${isAsking ? '' : 'hidden'}`;
+  entry.alertMarker.className = `alert-marker ${isPromptActive ? '' : 'hidden'}`;
+  entry.alertMarker.textContent = isCountdown ? '[~]' : '[!]';
 
   // State badge
-  entry.stateBadge.className = `state-badge ${session.state}`;
-  entry.stateWord.textContent = (session.state || '').toUpperCase();
+  entry.stateBadge.className = `state-badge ${state}`;
+  const iconEl = entry.stateIcon || entry.stateCircle;
+  if (iconEl) {
+    iconEl.className = `state-icon state-circle ${state === 'busy' ? 'spinner' : ''}`;
+    iconEl.textContent = getStateIcon(state);
+  }
+  const ruleName = session.rule || (session.prompt && session.prompt.rule);
+  const ruleText = (isCountdown && ruleName) ? ` (${ruleName})` : '';
+  entry.stateWord.textContent = isCountdown ? ('COUNTDOWN' + (session.countdown ? ` ${session.countdown}s` : '') + ruleText) : state.toUpperCase();
 
   // Display Name (only if not editing)
   if (editingSessionKey !== session.sessionKey && entry.nameEl) {
@@ -603,9 +660,19 @@ function updateRow(entry, session) {
     }
   }
 
+  // AUTO ON marker badge
+  if (entry.autoEl) {
+    entry.autoEl.className = `session-auto-badge ${session.auto ? '' : 'hidden'}`;
+  }
+
+  // PERSIST ALLOWED marker badge
+  if (entry.persistEl) {
+    entry.persistEl.className = `session-persist-badge ${session.allowPersist ? '' : 'hidden'}`;
+  }
+
   // Agent badge
   if (entry.agentEl) {
-    entry.agentEl.textContent = session.agent || 'agent';
+    entry.agentEl.textContent = (session.agent || 'agent') + (session.auto ? ' (auto)' : '');
     entry.agentEl.title = `Agent: ${session.agent || 'agent'}`;
   }
 
@@ -629,8 +696,8 @@ function updateRow(entry, session) {
     entry.summaryEl.style.display = 'none';
   }
 
-  // ASKING prompt line
-  if (isAsking && session.prompt) {
+  // ASKING / COUNTDOWN prompt line
+  if (isPromptActive && session.prompt) {
     const cmdText = session.prompt.command || 'unknown command';
     const decisionText = session.prompt.decision || 'needs you';
     entry.promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-cmd">${escapeHtml(cmdText)}</span> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
@@ -853,6 +920,10 @@ function unselectAgent() {
   historyEvents = [];
   historyHasOlder = false;
   historyNextOffset = 0;
+  if (historySummary) {
+    historySummary.textContent = '';
+    historySummary.style.display = 'none';
+  }
   updateSelectionHighlight();
   renderHistory([]);
 }
@@ -1013,6 +1084,7 @@ function renderHistory(events) {
     historyPlaceholder.textContent = 'Select an agent to see its history';
     historyGroups.innerHTML = '';
     if (historyHeader) historyHeader.style.display = 'none';
+    if (historySummary) historySummary.style.display = 'none';
     if (loadOlderContainer) loadOlderContainer.style.display = 'none';
     return;
   }
@@ -1037,8 +1109,42 @@ function renderHistory(events) {
     emptyMsg.className = 'empty-state';
     emptyMsg.textContent = 'No recorded events for this agent';
     historyGroups.appendChild(emptyMsg);
+    if (historySummary) historySummary.style.display = 'none';
     if (loadOlderContainer) loadOlderContainer.style.display = 'none';
     return;
+  }
+
+  // Calculate summary counts across all prompts of the selected agent
+  let knownAnswerCount = 0;
+  let agreedCount = 0;
+  let persistCount = 0;
+  let needsYouCount = 0;
+
+  groups.forEach(group => {
+    (group.prompts || []).forEach(p => {
+      const isKnown = p.answer_key !== undefined && p.answer_key !== null && p.answer_key !== 'unknown';
+      if (isKnown) {
+        knownAnswerCount++;
+        if (p.agreement === 'agrees') {
+          agreedCount++;
+        }
+      }
+
+      if (p.answer_class === 'yes_persist') {
+        persistCount++;
+      }
+
+      const isNeedsUser = (p.decision && p.decision.action === 'needs_user') ||
+                          (typeof p.plainDecision === 'string' && p.plainDecision.toLowerCase().includes('needs you'));
+      if (isNeedsUser) {
+        needsYouCount++;
+      }
+    });
+  });
+
+  if (historySummary) {
+    historySummary.textContent = `Out of ${knownAnswerCount} prompts, the dry run would have handled ${agreedCount} the same way you did. Persist options chosen: ${persistCount} · Needs you prompts: ${needsYouCount}`;
+    historySummary.style.display = 'block';
   }
 
   groups.forEach(group => {
@@ -1148,15 +1254,31 @@ function createHistoryCard(prompt, timeFormat) {
   const footer = document.createElement('div');
   footer.className = 'card-footer';
 
+  const decisionLine = document.createElement('div');
+  decisionLine.className = 'card-decision-line';
+
   const decisionEl = document.createElement('span');
   decisionEl.className = 'card-decision';
   decisionEl.textContent = `Dry-run: ${prompt.plainDecision || formatPlainDecision(prompt.decision)}`;
+  decisionLine.appendChild(decisionEl);
+
+  if (prompt.agreement === 'agrees') {
+    const agreeBadge = document.createElement('span');
+    agreeBadge.className = 'agreement-badge badge-agrees';
+    agreeBadge.textContent = 'Tool would have agreed';
+    decisionLine.appendChild(agreeBadge);
+  } else if (prompt.agreement === 'differs') {
+    const differBadge = document.createElement('span');
+    differBadge.className = 'agreement-badge badge-differs';
+    differBadge.textContent = 'Tool would have differed';
+    decisionLine.appendChild(differBadge);
+  }
 
   const answerEl = document.createElement('span');
   answerEl.className = 'card-answer';
-  answerEl.textContent = 'Answer: not recorded';
+  answerEl.textContent = prompt.answer || 'Answer: not recorded';
 
-  footer.appendChild(decisionEl);
+  footer.appendChild(decisionLine);
   footer.appendChild(answerEl);
   card.appendChild(footer);
 
@@ -1175,6 +1297,12 @@ function updateSettingsTab() {
   }
   if (settingNotifications && document.activeElement !== settingNotifications) {
     settingNotifications.checked = currentConfig.notifications !== false;
+  }
+  if (pauseCheckbox && document.activeElement !== pauseCheckbox) {
+    pauseCheckbox.checked = Boolean(currentConfig.autoPaused);
+  }
+  if (settingAutoPaused && document.activeElement !== settingAutoPaused) {
+    settingAutoPaused.checked = Boolean(currentConfig.autoPaused);
   }
   if (settingTimeFormat && document.activeElement !== settingTimeFormat) {
     settingTimeFormat.value = currentConfig.timeFormat || '24-hour';
@@ -1266,6 +1394,27 @@ if (settingNotifications) {
     currentConfig.notifications = e.target.checked;
     if (window.agentwatch && window.agentwatch.setSetting) {
       window.agentwatch.setSetting('notifications', e.target.checked);
+    }
+  });
+}
+
+// Pause auto-accept checkboxes (global toggle in header and setting item)
+if (pauseCheckbox) {
+  pauseCheckbox.addEventListener('change', (e) => {
+    currentConfig.autoPaused = e.target.checked;
+    if (settingAutoPaused) settingAutoPaused.checked = e.target.checked;
+    if (window.agentwatch && window.agentwatch.setSetting) {
+      window.agentwatch.setSetting('autoPaused', e.target.checked);
+    }
+  });
+}
+
+if (settingAutoPaused) {
+  settingAutoPaused.addEventListener('change', (e) => {
+    currentConfig.autoPaused = e.target.checked;
+    if (pauseCheckbox) pauseCheckbox.checked = e.target.checked;
+    if (window.agentwatch && window.agentwatch.setSetting) {
+      window.agentwatch.setSetting('autoPaused', e.target.checked);
     }
   });
 }
@@ -1367,6 +1516,7 @@ if (typeof module !== 'undefined' && module.exports) {
     render,
     createRow,
     updateRow,
+    getStateIcon,
     startRename,
     saveRename,
     cancelRename,

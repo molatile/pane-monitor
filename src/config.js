@@ -17,6 +17,8 @@ module.exports = {
   setAlwaysOnTop: shared.setAlwaysOnTop,
   setWindowBounds: shared.setWindowBounds,
   setAutoOpenWindow: shared.setAutoOpenWindow,
+  setAutoPaused: shared.setAutoPaused,
+  setAutoAcceptDefault: shared.setAutoAcceptDefault,
   setTimeFormat: shared.setTimeFormat,
   isGuiRunning: shared.isGuiRunning,
   orderSessions: shared.orderSessions,

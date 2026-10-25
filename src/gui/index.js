@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const { CONFIG_PATH, loadConfig, isGuiRunning, stopGui } = require('../shared');
 
 let electronPath = null;
 try {
@@ -13,8 +14,17 @@ function startGui(options = {}) {
   const quiet = Boolean(options.quiet);
   const focus = Boolean(options.focus);
   const autoOpen = Boolean(options.autoOpen);
+  const restart = Boolean(options.restart);
   const extraArgs = options.args || [];
   const mainScript = path.join(__dirname, 'main.js');
+  const configPath = options.configPath || CONFIG_PATH;
+
+  if (restart) {
+    const config = loadConfig(configPath);
+    if (isGuiRunning(config)) {
+      stopGui(config, configPath);
+    }
+  }
 
   const execPath = options.electronPath !== undefined ? options.electronPath : electronPath;
   if (!execPath) {

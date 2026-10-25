@@ -28,6 +28,8 @@ function loadConfig(configPath = CONFIG_PATH) {
         notifications: true,
         alwaysOnTop: false,
         autoOpenWindow: true,
+        autoPaused: false,
+        autoAcceptDefault: false,
         timeFormat: '24-hour',
         window: { width: 420, height: 360 },
         notified: {}
@@ -41,6 +43,8 @@ function loadConfig(configPath = CONFIG_PATH) {
         notifications: true,
         alwaysOnTop: false,
         autoOpenWindow: true,
+        autoPaused: false,
+        autoAcceptDefault: false,
         timeFormat: '24-hour',
         window: { width: 420, height: 360 },
         notified: {}
@@ -53,8 +57,11 @@ function loadConfig(configPath = CONFIG_PATH) {
       notifications: parsed.notifications !== undefined ? Boolean(parsed.notifications) : true,
       alwaysOnTop: Boolean(parsed.alwaysOnTop),
       autoOpenWindow: parsed.autoOpenWindow !== undefined ? Boolean(parsed.autoOpenWindow) : true,
+      autoPaused: Boolean(parsed.autoPaused),
+      autoAcceptDefault: Boolean(parsed.autoAcceptDefault),
       timeFormat: (parsed.timeFormat === '12-hour' || parsed.timeFormat === '12h') ? '12-hour' : '24-hour',
       guiPid: typeof parsed.guiPid === 'number' ? parsed.guiPid : undefined,
+      guiStartTime: typeof parsed.guiStartTime === 'number' ? parsed.guiStartTime : undefined,
       window: (parsed.window && typeof parsed.window === 'object')
         ? {
             width: typeof parsed.window.width === 'number' ? parsed.window.width : 420,
@@ -72,6 +79,8 @@ function loadConfig(configPath = CONFIG_PATH) {
       notifications: true,
       alwaysOnTop: false,
       autoOpenWindow: true,
+      autoPaused: false,
+      autoAcceptDefault: false,
       timeFormat: '24-hour',
       window: { width: 420, height: 360 },
       notified: {}
@@ -104,11 +113,20 @@ function saveConfig(config, configPath = CONFIG_PATH) {
     if (config.autoOpenWindow !== undefined) {
       sanitized.autoOpenWindow = Boolean(config.autoOpenWindow);
     }
+    if (config.autoPaused !== undefined) {
+      sanitized.autoPaused = Boolean(config.autoPaused);
+    }
+    if (config.autoAcceptDefault !== undefined) {
+      sanitized.autoAcceptDefault = Boolean(config.autoAcceptDefault);
+    }
     if (config.timeFormat !== undefined) {
       sanitized.timeFormat = (config.timeFormat === '12-hour' || config.timeFormat === '12h') ? '12-hour' : '24-hour';
     }
     if (typeof config.guiPid === 'number') {
       sanitized.guiPid = config.guiPid;
+    }
+    if (typeof config.guiStartTime === 'number') {
+      sanitized.guiStartTime = config.guiStartTime;
     }
 
     if (config.window && typeof config.window === 'object') {
@@ -309,6 +327,18 @@ function setAutoOpenWindow(config, enabled, configPath = CONFIG_PATH) {
   return config;
 }
 
+function setAutoPaused(config, isPaused, configPath = CONFIG_PATH) {
+  config.autoPaused = Boolean(isPaused);
+  saveConfig(config, configPath);
+  return config;
+}
+
+function setAutoAcceptDefault(config, enabled, configPath = CONFIG_PATH) {
+  config.autoAcceptDefault = Boolean(enabled);
+  saveConfig(config, configPath);
+  return config;
+}
+
 /**
  * Sets time format ('24-hour' or '12-hour') and saves the configuration.
  */
@@ -329,6 +359,86 @@ function isGuiRunning(config) {
   } catch (e) {
     return false;
   }
+}
+
+/**
+ * Stops any running GUI window process and cleans up config.
+ */
+function stopGui(config, configPath = CONFIG_PATH) {
+  if (!config || typeof config.guiPid !== 'number') return false;
+  const pid = config.guiPid;
+  let killed = false;
+  try {
+    process.kill(pid);
+    killed = true;
+  } catch (e) {}
+  if (process.platform === 'win32') {
+    try {
+      require('child_process').execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+      killed = true;
+    } catch (e) {}
+  }
+  delete config.guiPid;
+  delete config.guiStartTime;
+  try {
+    saveConfig(config, configPath);
+  } catch (e) {}
+
+  // Wait briefly (up to 500ms) for the process to exit and release single-instance lock
+  const startWait = Date.now();
+  while (Date.now() - startWait < 500) {
+    try {
+      process.kill(pid, 0);
+      const waitUntil = Date.now() + 50;
+      while (Date.now() < waitUntil) {}
+    } catch (e) {
+      break;
+    }
+  }
+
+  return killed;
+}
+
+/**
+ * Returns the latest modification time (ms) among GUI source files.
+ */
+function getGuiSourceMtime(baseDir = __dirname) {
+  const dirs = [
+    baseDir,
+    path.join(baseDir, 'gui'),
+    path.join(baseDir, '..', 'bin')
+  ];
+  let latestMtime = 0;
+  for (const dir of dirs) {
+    try {
+      if (!fs.existsSync(dir)) continue;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (['.js', '.html', '.css'].includes(ext)) {
+            const stat = fs.statSync(path.join(dir, entry.name));
+            if (stat.mtimeMs > latestMtime) {
+              latestMtime = stat.mtimeMs;
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+  return latestMtime;
+}
+
+/**
+ * Checks if the running GUI is stale due to code changes made after its launch.
+ */
+function isGuiStale(config, baseDir = __dirname) {
+  if (!config || typeof config.guiPid !== 'number') return false;
+  if (!isGuiRunning(config)) return false;
+  const startTime = config.guiStartTime;
+  if (typeof startTime !== 'number') return true;
+  const latestSourceMtime = getGuiSourceMtime(baseDir);
+  return latestSourceMtime > startTime;
 }
 
 
@@ -403,6 +513,11 @@ function getStateLight(state, isDead, useColor = true) {
         plain: '● ASKING',
         formatted: useColor ? '\x1b[31;1m● ASKING\x1b[0m' : '● ASKING'
       };
+    case 'countdown':
+      return {
+        plain: '● COUNTDOWN',
+        formatted: useColor ? '\x1b[35;1m● COUNTDOWN\x1b[0m' : '● COUNTDOWN'
+      };
     default:
       return {
         plain: '● UNKNOWN',
@@ -420,6 +535,10 @@ function getSessionSummary(session) {
   }
   if (session.hasProfile === false) {
     return 'no profile';
+  }
+  if (session.state === 'countdown') {
+    const secs = (session.countdown !== undefined && session.countdown !== null) ? `${session.countdown}s` : '';
+    return `Auto-answering ${secs ? 'in ' + secs : ''}`.trim();
   }
   if (session.state === 'asking') {
     return (session.prompt && session.prompt.question) || 'Permission requested';
@@ -468,7 +587,9 @@ function getDashboardData(options = {}) {
       summary: getSessionSummary(session),
       backgroundTasks: bgCount,
       isAsking,
-      prompt: session.prompt || null
+      prompt: session.prompt || null,
+      auto: Boolean(session.auto),
+      countdown: (session.countdown !== undefined && session.countdown !== null) ? session.countdown : null
     };
   });
 
@@ -496,8 +617,13 @@ module.exports = {
   setAlwaysOnTop,
   setWindowBounds,
   setAutoOpenWindow,
+  setAutoPaused,
+  setAutoAcceptDefault,
   setTimeFormat,
   isGuiRunning,
+  stopGui,
+  getGuiSourceMtime,
+  isGuiStale,
   orderSessions,
   reorderSession,
   acquireNotificationLock,

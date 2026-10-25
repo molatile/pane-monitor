@@ -4,7 +4,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { maskText } = require('./masker');
 
-const SESSIONS_DIR = path.join(os.homedir(), '.agentwatch', 'sessions');
+const SESSIONS_DIR = process.env.AGENTWATCH_SESSIONS_DIR || path.join(os.homedir(), '.agentwatch', 'sessions');
 const HEARTBEAT_INTERVAL_MS = 2000;
 const DEAD_SESSION_TIMEOUT_MS = 6000;
 const REMOVE_SESSION_TIMEOUT_MS = 60000;
@@ -16,6 +16,9 @@ function formatDecision(decision) {
   if (!decision) return 'needs you';
   if (typeof decision === 'string') return decision;
   if (typeof decision === 'object') {
+    if (decision.reason && decision.reason.startsWith('DANGER:')) {
+      return decision.reason;
+    }
     if (decision.action === 'would_approve') {
       const opt = decision.optionKey || '1';
       const delay = decision.delay !== undefined ? decision.delay : 3;
@@ -56,6 +59,10 @@ class SessionStatusManager {
     this.state = options.initialState || 'idle';
     this.stateSince = new Date().toISOString();
     this.hasProfile = options.hasProfile !== undefined ? Boolean(options.hasProfile) : true;
+    this.auto = options.auto !== undefined ? Boolean(options.auto) : false;
+    this.allowPersist = options.allowPersist !== undefined ? Boolean(options.allowPersist) : false;
+    this.countdown = typeof options.countdown === 'number' ? options.countdown : null;
+    this.rule = options.rule || null;
     this.prompt = null;
     this.heartbeatTimer = null;
     this.backgroundTasks = options.backgroundTasks || 0;
@@ -65,10 +72,14 @@ class SessionStatusManager {
    * Initializes the session directory and writes initial status file.
    */
   start() {
-    if (!fs.existsSync(this.sessionsDir)) {
-      fs.mkdirSync(this.sessionsDir, { recursive: true });
+    try {
+      if (!fs.existsSync(this.sessionsDir)) {
+        fs.mkdirSync(this.sessionsDir, { recursive: true });
+      }
+      this.writeStatus();
+    } catch (e) {
+      // Non-fatal if sessions directory is not writable
     }
-    this.writeStatus();
 
     // Start 2-second heartbeat
     this.heartbeatTimer = setInterval(() => {
@@ -83,27 +94,58 @@ class SessionStatusManager {
    * Updates current state, prompt summary, and running background task count.
    */
   update(state, stateSince, promptSummary, options = {}) {
-    if (state !== undefined) this.state = (!this.hasProfile && state === 'asking') ? 'busy' : state;
+    if (state !== undefined) {
+      this.state = (!this.hasProfile && (state === 'asking' || state === 'countdown')) ? 'busy' : state;
+    }
     if (stateSince !== undefined) this.stateSince = stateSince;
 
-    if (this.hasProfile && this.state === 'asking' && promptSummary) {
+    if (this.hasProfile && (this.state === 'asking' || this.state === 'countdown') && promptSummary) {
       const decisionText = promptSummary.decision
         ? formatDecision(promptSummary.decision)
         : 'needs you';
 
+      const ruleName = (options && options.rule) ||
+        (promptSummary.decision && typeof promptSummary.decision === 'object' && promptSummary.decision.rule) ||
+        this.rule ||
+        null;
+
       this.prompt = {
         question: maskText(promptSummary.question || ''),
         command: maskText(promptSummary.commandSpaced || promptSummary.command || ''),
-        decision: decisionText
+        decision: decisionText,
+        rule: ruleName
       };
+      this.rule = ruleName;
     } else {
       this.prompt = null;
+      this.rule = null;
     }
 
-    if (options && typeof options === 'object' && options.backgroundTasks !== undefined) {
-      this.backgroundTasks = options.backgroundTasks;
+    if (options && typeof options === 'object') {
+      if (options.backgroundTasks !== undefined) {
+        this.backgroundTasks = options.backgroundTasks;
+      }
+      if (options.countdown !== undefined) {
+        this.countdown = options.countdown;
+      } else if (this.state !== 'countdown') {
+        this.countdown = null;
+      }
+      if (options.auto !== undefined) {
+        this.auto = Boolean(options.auto);
+      }
+      if (options.allowPersist !== undefined) {
+        this.allowPersist = Boolean(options.allowPersist);
+      }
+      if (options.rule !== undefined) {
+        this.rule = options.rule;
+      }
     } else if (typeof options === 'number') {
       this.backgroundTasks = options;
+      if (this.state !== 'countdown') {
+        this.countdown = null;
+      }
+    } else if (this.state !== 'countdown') {
+      this.countdown = null;
     }
 
     this.writeStatus();
@@ -120,6 +162,10 @@ class SessionStatusManager {
       folderHash: this.folderHash,
       agent: this.agent,
       hasProfile: this.hasProfile,
+      auto: Boolean(this.auto),
+      allowPersist: Boolean(this.allowPersist),
+      countdown: (this.countdown !== undefined && this.countdown !== null) ? this.countdown : null,
+      rule: this.rule || null,
       folder: this.folder,
       state: this.state,
       stateSince: this.stateSince,
