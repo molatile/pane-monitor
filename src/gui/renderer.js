@@ -43,6 +43,7 @@ const pastAgentsList = getEl('past-agents-list');
 const historyHeader = getEl('history-header');
 const historyAgentName = getEl('history-agent-name');
 const clearHistoryBtn = getEl('clear-history-btn');
+const clearAllHistoryBtn = getEl('clear-all-history-btn');
 const historyPlaceholder = getEl('history-placeholder');
 const historySummary = getEl('history-summary');
 const historyGroups = getEl('history-groups');
@@ -1635,6 +1636,24 @@ if (clearHistoryBtn) {
 
     if (window.agentwatch && window.agentwatch.clearAgentHistory) {
       window.agentwatch.clearAgentHistory(selectedAgentKey).then(() => {
+        historyEvents = [];
+        historyHasOlder = false;
+        historyNextOffset = 0;
+        renderHistory([]);
+        refreshKnownAgents();
+      });
+    }
+  });
+}
+
+// Clear All History Button
+if (clearAllHistoryBtn) {
+  clearAllHistoryBtn.addEventListener('click', () => {
+    const ok = window.confirm("Are you sure you want to clear ALL history across all agents?");
+    if (!ok) return;
+
+    if (window.agentwatch && window.agentwatch.clearAllHistory) {
+      window.agentwatch.clearAllHistory().then(() => {
         historyEvents = [];
         historyHasOlder = false;
         historyNextOffset = 0;

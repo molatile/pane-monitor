@@ -8,7 +8,8 @@
     "spike": "./spike.js"
   },
   "scripts": {
-    "test": "node tests/test-unit.js && node tests/test-agentwatch.js && node tests/test-dashboard.js && node tests/test-rules.js && node tests/test-danger.js",
+    "test": "node tests/test-unit.js && node tests/test-agentwatch.js && node tests/test-dashboard.js && node tests/test-rules.js && node tests/test-danger.js && node tests/test-rules-hotreload-and-history.js",
+    "test:hotreload": "node tests/test-rules-hotreload-and-history.js",
     "test:danger": "node tests/test-danger.js",
     "test:unit": "node tests/test-unit.js",
     "test:agentwatch": "node tests/test-agentwatch.js",

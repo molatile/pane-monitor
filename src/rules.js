@@ -5,6 +5,45 @@ const crypto = require('crypto');
 
 const CANONICAL_RULES_PATH = path.resolve(__dirname, '..', 'rules.json');
 
+/**
+ * Resolves the rules.json file path:
+ * 1. customPath if explicitly provided
+ * 2. rules.json in cwd
+ * 3. Walk up ancestor directories from cwd to find rules.json
+ * 4. CANONICAL_RULES_PATH (project root)
+ * 5. Fallback to cwd rules.json
+ */
+function resolveRulesPath(customPath, cwd) {
+  if (customPath) {
+    return path.resolve(customPath);
+  }
+  const rawCwd = cwd || process.cwd();
+  const cwdRules = path.resolve(rawCwd, 'rules.json');
+  if (fs.existsSync(cwdRules)) {
+    return cwdRules;
+  }
+
+  // Walk up ancestor directories
+  let curr = path.resolve(rawCwd);
+  while (true) {
+    const candidate = path.join(curr, 'rules.json');
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+    const parent = path.dirname(curr);
+    if (!parent || parent === curr) {
+      break;
+    }
+    curr = parent;
+  }
+
+  if (fs.existsSync(CANONICAL_RULES_PATH)) {
+    return CANONICAL_RULES_PATH;
+  }
+
+  return cwdRules;
+}
+
 function getAgentwatchDir() {
   return process.env.AGENTWATCH_DIR || path.join(os.homedir(), '.agentwatch');
 }
@@ -485,7 +524,9 @@ function checkDangerMatch(prompt, dangerList) {
  * Strips single-line (//) and multi-line comments before parsing JSON.
  */
 function loadRules(rulesPath) {
+  const resolved = resolveRulesPath(rulesPath);
   const candidatePaths = [
+    resolved,
     rulesPath,
     path.resolve(process.cwd(), 'rules.json'),
     path.resolve(__dirname, '..', 'rules.json')
@@ -1731,6 +1772,7 @@ module.exports = {
   saveFolderRules,
   copyAncestorRules,
   loadRulesForFolder,
+  resolveRulesPath,
   CANONICAL_RULES_PATH,
   DEFAULT_DANGER_LIST,
   DEFAULT_RULES

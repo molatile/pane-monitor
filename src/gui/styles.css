@@ -843,7 +843,14 @@ details[open] .past-agents-summary::before {
   color: var(--text-primary);
 }
 
-.clear-history-btn {
+.history-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clear-history-btn,
+.clear-all-history-btn {
   background: transparent;
   border: 1px solid var(--border-color);
   border-radius: 4px;
@@ -855,7 +862,8 @@ details[open] .past-agents-summary::before {
   transition: all 0.15s ease;
 }
 
-.clear-history-btn:hover {
+.clear-history-btn:hover,
+.clear-all-history-btn:hover {
   background-color: #fee2e2;
   border-color: #f87171;
 }

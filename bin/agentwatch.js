@@ -8,11 +8,14 @@ function printUsage() {
   console.error('Usage: agentwatch [--auto] [--record] [--quiet] <command> [args...]');
   console.error('       agentwatch dash [--quiet]');
   console.error('       agentwatch gui [--quiet] [--restart]');
+  console.error('       agentwatch clear-history [sessionKey]');
   console.error('Example: agentwatch agy');
   console.error('         agentwatch --auto agy');
   console.error('         agentwatch dash');
   console.error('         agentwatch gui');
   console.error('         agentwatch gui --restart');
+  console.error('         agentwatch clear-history');
+  console.error('         agentwatch clear-history agy:7cfa67ecd72da468');
   process.exit(1);
 }
 
@@ -60,6 +63,17 @@ if (require.main === module) {
     startDashboard({ quiet });
   } else if (command === 'gui') {
     startGui({ quiet, focus: true, restart });
+  } else if (command === 'clear-history') {
+    const { clearAgentHistory } = require('../src/history');
+    const targetKey = commandArgs[0] || '*';
+    const res = clearAgentHistory(targetKey);
+    if (res.success) {
+      console.log(`Successfully cleared ${res.removedCount} history events.`);
+    } else {
+      console.error(`Failed to clear history: ${res.error}`);
+      process.exit(1);
+    }
+    process.exit(0);
   } else {
     startAgentwatch({
       command,

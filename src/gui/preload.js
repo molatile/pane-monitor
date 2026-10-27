@@ -68,6 +68,13 @@ contextBridge.exposeInMainWorld('agentwatch', {
   },
 
   /**
+   * Triggers clearing all history events across all agents.
+   */
+  clearAllHistory: () => {
+    return ipcRenderer.invoke('clear-all-history');
+  },
+
+  /**
    * Reads active rules and list of available backups.
    */
   getRules: () => {

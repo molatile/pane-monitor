@@ -16,7 +16,7 @@ const {
 } = require('../shared');
 const { SESSIONS_DIR, getSessionStatusList } = require('../status');
 const { NotificationManager } = require('../notifier');
-const { readHistory, clearAgentHistory } = require('../history');
+const { readHistory, clearAgentHistory, clearAllHistory } = require('../history');
 const {
   CANONICAL_RULES_PATH,
   loadRules,
@@ -302,6 +302,13 @@ ipcMain.handle('read-history', (event, options = {}) => {
 // Clear history action (atomic rewrite omitting that key's events)
 ipcMain.handle('clear-agent-history', (event, { sessionKey }) => {
   const res = clearAgentHistory(sessionKey);
+  sendDashboardUpdate();
+  return res;
+});
+
+// Clear all history action
+ipcMain.handle('clear-all-history', () => {
+  const res = clearAllHistory();
   sendDashboardUpdate();
   return res;
 });

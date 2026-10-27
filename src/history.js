@@ -264,7 +264,7 @@ function readHistory(options = {}) {
  * Rewrites history.jsonl without a given key's events, atomically.
  * This is the ONLY write allowed to history.jsonl besides append.
  *
- * @param {string} key - SessionKey to clear (or 'unassigned')
+ * @param {string} key - SessionKey to clear (or 'unassigned', or '*' / '__all__' to clear all)
  * @param {string} [customFilePath] - Target history file path
  * @returns {{ success: boolean, removedCount: number }}
  */
@@ -286,6 +286,7 @@ function clearAgentHistory(key, customFilePath) {
     const raw = fs.readFileSync(targetPath, 'utf8');
     const lines = raw.split('\n');
     const keptLines = [];
+    const isAll = (key === '*' || key === '__all__' || key === 'all');
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -295,13 +296,17 @@ function clearAgentHistory(key, customFilePath) {
       try {
         event = JSON.parse(trimmed);
       } catch (e) {
-        // Keep unparseable lines so we don't corrupt unrelated data
-        keptLines.push(trimmed);
+        // If not clearing all, keep unparseable lines so we don't corrupt unrelated data
+        if (!isAll) {
+          keptLines.push(trimmed);
+        }
         continue;
       }
 
       let shouldRemove = false;
-      if (key === 'unassigned' || key === '__unassigned__') {
+      if (isAll) {
+        shouldRemove = true;
+      } else if (key === 'unassigned' || key === '__unassigned__') {
         shouldRemove = !event.sessionKey;
       } else {
         shouldRemove = (event.sessionKey === key);
@@ -335,6 +340,13 @@ function clearAgentHistory(key, customFilePath) {
     } catch (_) {}
     return { success: false, removedCount: 0, error: err.message };
   }
+}
+
+/**
+ * Clears all events in history.jsonl, atomically.
+ */
+function clearAllHistory(customFilePath) {
+  return clearAgentHistory('*', customFilePath);
 }
 
 /**
@@ -730,6 +742,7 @@ module.exports = {
   maskObject,
   readHistory,
   clearAgentHistory,
+  clearAllHistory,
   formatDisplayTime,
   formatSessionLength,
   formatPlainDecision,

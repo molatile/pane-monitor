@@ -18,6 +18,7 @@ const {
   evaluatePrompt,
   loadRules,
   loadRulesForFolder,
+  resolveRulesPath,
   getFolderRulesPath,
   hasFolderRules,
   loadFolderRules,
@@ -80,7 +81,7 @@ function startAgentwatch(options = {}) {
     }
   }
 
-  const targetRulesPath = options.rulesPath || path.resolve(process.cwd(), 'rules.json');
+  const targetRulesPath = resolveRulesPath(options.rulesPath, rawCwd);
   const folderRulesPath = getFolderRulesPath(folderKey, folderRulesDir);
 
   let lastDefaultRulesMtime = 0;
