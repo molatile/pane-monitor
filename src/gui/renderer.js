@@ -18,39 +18,67 @@ let historyEvents = [];
 let historyHasOlder = false;
 let historyNextOffset = 0;
 
-// DOM references
-const countBadge = document.getElementById('agent-count-badge');
-const pinCheckbox = document.getElementById('always-on-top-checkbox');
-const pauseCheckbox = document.getElementById('pause-auto-checkbox');
-const container = document.getElementById('sessions-container');
+// DOM references helper for environment safety (browser or Node)
+const getEl = (id) => typeof document !== 'undefined' ? document.getElementById(id) : null;
+
+const countBadge = getEl('agent-count-badge');
+const pinCheckbox = getEl('always-on-top-checkbox');
+const pauseCheckbox = getEl('pause-auto-checkbox');
+const container = getEl('sessions-container');
 
 // Tabs
-const tabBtnAgents = document.getElementById('tab-btn-agents');
-const tabBtnSettings = document.getElementById('tab-btn-settings');
-const agentsView = document.getElementById('agents-view');
-const settingsView = document.getElementById('settings-view');
+const tabBtnAgents = getEl('tab-btn-agents');
+const tabBtnRules = getEl('tab-btn-rules');
+const tabBtnSettings = getEl('tab-btn-settings');
+const agentsView = getEl('agents-view');
+const rulesView = getEl('rules-view');
+const settingsView = getEl('settings-view');
 
 // Past Agents
-const pastAgentsDetails = document.getElementById('past-agents-details');
-const pastAgentsCount = document.getElementById('past-agents-count');
-const pastAgentsList = document.getElementById('past-agents-list');
+const pastAgentsDetails = getEl('past-agents-details');
+const pastAgentsCount = getEl('past-agents-count');
+const pastAgentsList = getEl('past-agents-list');
 
 // History Pane
-const historyHeader = document.getElementById('history-header');
-const historyAgentName = document.getElementById('history-agent-name');
-const clearHistoryBtn = document.getElementById('clear-history-btn');
-const historyPlaceholder = document.getElementById('history-placeholder');
-const historySummary = document.getElementById('history-summary');
-const historyGroups = document.getElementById('history-groups');
-const loadOlderContainer = document.getElementById('load-older-container');
-const loadOlderBtn = document.getElementById('load-older-btn');
+const historyHeader = getEl('history-header');
+const historyAgentName = getEl('history-agent-name');
+const clearHistoryBtn = getEl('clear-history-btn');
+const historyPlaceholder = getEl('history-placeholder');
+const historySummary = getEl('history-summary');
+const historyGroups = getEl('history-groups');
+const loadOlderContainer = getEl('load-older-container');
+const loadOlderBtn = getEl('load-older-btn');
 
 // Settings Controls
-const settingAutoOpen = document.getElementById('setting-auto-open');
-const settingAutoPaused = document.getElementById('setting-auto-paused');
-const settingPinTop = document.getElementById('setting-pin-top');
-const settingNotifications = document.getElementById('setting-notifications');
-const settingTimeFormat = document.getElementById('setting-time-format');
+const settingAutoOpen = getEl('setting-auto-open');
+const settingAutoPaused = getEl('setting-auto-paused');
+const settingAutoAcceptDefault = getEl('setting-auto-accept-default');
+const settingAllowTurnOn = getEl('setting-allow-turn-on');
+const settingPinTop = getEl('setting-pin-top');
+const settingNotifications = getEl('setting-notifications');
+const settingTimeFormat = getEl('setting-time-format');
+
+// Turn on confirmation modal elements (Stage 6)
+const turnOnModal = getEl('turn-on-modal');
+const turnOnRulesList = getEl('turn-on-rules-list');
+const turnOnStartInput = getEl('turn-on-start-input');
+const turnOnConfirmBtn = getEl('turn-on-confirm-btn');
+const turnOnCancelBtn = getEl('turn-on-cancel-btn');
+let turnOnTargetSession = null;
+
+// Nested folder banner elements
+const nestedFolderBanner = getEl('nested-folder-banner');
+const nestedBannerText = getEl('nested-banner-text');
+const nestedBannerYesBtn = getEl('nested-banner-yes-btn');
+const nestedBannerNoBtn = getEl('nested-banner-no-btn');
+const nestedBannerDismissBtn = getEl('nested-banner-dismiss-btn');
+const nestedFeedbackBanner = getEl('nested-feedback-banner');
+
+// Rules folder selector elements
+const rulesTargetSelect = getEl('rules-target-select');
+const resetFolderRulesBtn = getEl('reset-folder-rules-btn');
+let currentRulesTarget = 'default';
+let currentTargetHasOwnRules = false;
 
 // Map of sessionKey -> cached DOM references for live rows
 const rowCache = new Map();
@@ -144,6 +172,15 @@ function formatPlainDecision(decision) {
   if (typeof decision === 'object') {
     if (decision.reason && decision.reason.startsWith('DANGER:')) {
       return decision.reason;
+    }
+    if (decision.slowDanger) {
+      return `SLOW: matched '${decision.slowDanger}'`;
+    }
+    if (decision.reason && decision.reason.startsWith('SLOW:')) {
+      return decision.reason;
+    }
+    if (decision.log && decision.log.startsWith('Auto-approved')) {
+      return decision.log;
     }
     if (decision.action === 'would_approve') {
       const opt = decision.optionKey || '1';
@@ -327,6 +364,64 @@ function groupHistoryBySession(events = [], activeSessionIds = new Set()) {
   return groups;
 }
 
+function showNestedFolderBanner(pq) {
+  if (!nestedFolderBanner || !nestedBannerText) return;
+  nestedBannerText.textContent = `This folder, '${pq.folderName}', is inside '${pq.ancestorName}', which has its own accepting rules. Would you like this folder to have the same accepting rules as '${pq.ancestorName}'?`;
+  nestedFolderBanner.style.display = 'flex';
+
+  if (nestedBannerYesBtn) {
+    nestedBannerYesBtn.onclick = () => {
+      if (window.agentwatch && window.agentwatch.copyAncestorRules) {
+        window.agentwatch.copyAncestorRules(pq.folderKey, pq.ancestorKey).then(res => {
+          hideNestedFolderBanner();
+          if (res && res.success) {
+            let msg = `Successfully copied ${res.copiedCount} rules from '${pq.ancestorName}'.`;
+            if (res.skippedPersistCount > 0) {
+              msg += ` (${res.skippedPersistCount} rules with allowPersist skipped)`;
+            }
+            showNestedFeedback(msg);
+          }
+        });
+      }
+    };
+  }
+
+  if (nestedBannerNoBtn) {
+    nestedBannerNoBtn.onclick = () => {
+      if (window.agentwatch && window.agentwatch.setFolderChoice) {
+        window.agentwatch.setFolderChoice(pq.folderKey, 'declined', pq.ancestorKey).then(() => {
+          hideNestedFolderBanner();
+        });
+      }
+    };
+  }
+
+  if (nestedBannerDismissBtn) {
+    nestedBannerDismissBtn.onclick = () => {
+      if (window.agentwatch && window.agentwatch.dismissFolderQuestion) {
+        window.agentwatch.dismissFolderQuestion(pq.folderKey).then(() => {
+          hideNestedFolderBanner();
+        });
+      }
+    };
+  }
+}
+
+function hideNestedFolderBanner() {
+  if (nestedFolderBanner) {
+    nestedFolderBanner.style.display = 'none';
+  }
+}
+
+function showNestedFeedback(msg) {
+  if (!nestedFeedbackBanner) return;
+  nestedFeedbackBanner.textContent = msg;
+  nestedFeedbackBanner.style.display = 'block';
+  setTimeout(() => {
+    if (nestedFeedbackBanner) nestedFeedbackBanner.style.display = 'none';
+  }, 5000);
+}
+
 /**
  * Main dashboard render entry point.
  */
@@ -338,6 +433,14 @@ function render(data) {
     ...currentConfig,
     ...config
   };
+
+  // Check for pending nested folder question
+  const pendingSession = sessions.find(s => s.pendingQuestion && s.pendingQuestion.type === 'nested_folder_rules');
+  if (pendingSession && pendingSession.pendingQuestion) {
+    showNestedFolderBanner(pendingSession.pendingQuestion);
+  } else {
+    hideNestedFolderBanner();
+  }
 
   // Update header count
   if (countBadge) {
@@ -455,6 +558,94 @@ function getStateIcon(state) {
   }
 }
 
+function showToast(message) {
+  if (typeof document === 'undefined' || !document) return;
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    container.className = 'toast-container';
+    if (document.body && typeof document.body.appendChild === 'function') {
+      document.body.appendChild(container);
+    }
+  }
+  const toast = document.createElement('div');
+  toast.className = 'toast-item';
+  toast.textContent = message;
+  if (container && typeof container.appendChild === 'function') {
+    container.appendChild(toast);
+  }
+  setTimeout(() => {
+    if (toast.classList && typeof toast.classList.add === 'function') {
+      toast.classList.add('toast-fadeout');
+    }
+    setTimeout(() => {
+      if (toast.parentNode && typeof toast.parentNode.removeChild === 'function') {
+        toast.parentNode.removeChild(toast);
+      }
+    }, 400);
+  }, 3000);
+}
+
+function openTurnOnModal(session) {
+  if (!turnOnModal) return;
+  turnOnTargetSession = session;
+
+  if (turnOnRulesList) {
+    turnOnRulesList.innerHTML = '<li>Loading rules...</li>';
+  }
+  if (turnOnStartInput) {
+    turnOnStartInput.value = '';
+  }
+  if (turnOnConfirmBtn) {
+    turnOnConfirmBtn.disabled = true;
+  }
+
+  turnOnModal.classList.remove('hidden');
+
+  // Load rules for this session
+  const fetchPromise = (window.agentwatch && window.agentwatch.getFolderRules)
+    ? window.agentwatch.getFolderRules(session.sessionKey)
+    : (window.agentwatch && window.agentwatch.getRules ? window.agentwatch.getRules() : Promise.resolve({}));
+
+  fetchPromise.then(res => {
+    if (!turnOnRulesList) return;
+    turnOnRulesList.innerHTML = '';
+    const rulesObj = (res && res.rules) || savedRules || {};
+    const optionRules = Array.isArray(rulesObj.optionRules) ? rulesObj.optionRules : [];
+
+    if (optionRules.length === 0) {
+      const li = document.createElement('li');
+      li.textContent = 'No option rules defined (will use default allow list)';
+      turnOnRulesList.appendChild(li);
+    } else {
+      optionRules.forEach((rule, idx) => {
+        if (!rule || !rule.name) return;
+        const li = document.createElement('li');
+        const persistText = rule.allowPersist ? 'allowed' : 'not allowed';
+        li.innerHTML = `<strong>${escapeHtml(rule.name)}</strong> (priority ${idx + 1}, persist: ${persistText})`;
+        turnOnRulesList.appendChild(li);
+      });
+    }
+
+    if (Array.isArray(rulesObj.allow) && rulesObj.allow.length > 0) {
+      const li = document.createElement('li');
+      li.innerHTML = `<em>Command allow list:</em> ${escapeHtml(rulesObj.allow.join(', '))} (persist: not allowed)`;
+      turnOnRulesList.appendChild(li);
+    }
+  }).catch(() => {
+    if (turnOnRulesList) {
+      turnOnRulesList.innerHTML = '<li>(Could not load rules list)</li>';
+    }
+  });
+
+  if (turnOnStartInput) {
+    setTimeout(() => {
+      try { turnOnStartInput.focus(); } catch (e) {}
+    }, 50);
+  }
+}
+
 function createRow(session) {
   const key = session.sessionKey;
   const isAsking = Boolean(session.isAsking);
@@ -534,11 +725,60 @@ function createRow(session) {
     startRename(key);
   });
 
-  // AUTO ON marker badge
+  // AUTO ON marker badge (clicking turns auto OFF at once)
   const autoEl = document.createElement('span');
   autoEl.className = `session-auto-badge ${session.auto ? '' : 'hidden'}`;
   autoEl.textContent = 'AUTO ON';
-  autoEl.title = 'Auto-accept is enabled';
+  autoEl.title = 'Auto-accept is ON. Click to turn off.';
+  autoEl.setAttribute('role', 'button');
+  autoEl.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!session.sessionId) return;
+    if (window.agentwatch && window.agentwatch.setSessionAuto) {
+      window.agentwatch.setSessionAuto({ sessionId: session.sessionId, state: 'off' }).then(res => {
+        if (res && res.success) {
+          showToast(`Auto-accept turned off for ${session.folder || 'session'}`);
+        }
+      }).catch(() => {});
+    }
+  });
+
+  // Turn on auto-accept button
+  const turnOnAutoBtn = document.createElement('button');
+  turnOnAutoBtn.type = 'button';
+  turnOnAutoBtn.className = `btn-turn-on-auto ${session.auto ? 'hidden' : ''}`.trim();
+  turnOnAutoBtn.textContent = 'Turn on auto-accept';
+  const isAllowed = Boolean(currentConfig.allowTurnOnFromWindow);
+  turnOnAutoBtn.disabled = !isAllowed;
+  if (!isAllowed) {
+    turnOnAutoBtn.classList.add('disabled');
+    turnOnAutoBtn.title = 'Turning on auto-accept from the window is disabled in Settings';
+  } else {
+    turnOnAutoBtn.classList.remove('disabled');
+    turnOnAutoBtn.title = 'Click to configure and enable auto-accept for this session';
+  }
+  turnOnAutoBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!currentConfig.allowTurnOnFromWindow) return;
+    openTurnOnModal(session);
+  });
+
+  // Rule set indicator ("default rules" or "own rules")
+  const ruleSetEl = document.createElement('span');
+  ruleSetEl.className = 'session-ruleset-tag';
+  const ruleSetText = session.ruleSet || (session.hasOwnRules ? 'own rules' : 'default rules');
+  ruleSetEl.textContent = ruleSetText;
+  ruleSetEl.title = `Using ${ruleSetText}. Click to view rules.`;
+  ruleSetEl.setAttribute('role', 'button');
+  ruleSetEl.addEventListener('click', (e) => {
+    e.stopPropagation();
+    switchTab('rules');
+    currentRulesTarget = session.sessionKey || 'default';
+    if (rulesTargetSelect) {
+      rulesTargetSelect.value = currentRulesTarget;
+    }
+    loadRulesView();
+  });
 
   // PERSIST ALLOWED marker badge
   const persistEl = document.createElement('span');
@@ -566,6 +806,8 @@ function createRow(session) {
   info.appendChild(nameEl);
   info.appendChild(editBtn);
   info.appendChild(autoEl);
+  info.appendChild(turnOnAutoBtn);
+  info.appendChild(ruleSetEl);
   info.appendChild(persistEl);
   info.appendChild(agentEl);
   info.appendChild(folderEl);
@@ -616,6 +858,8 @@ function createRow(session) {
     nameEl,
     editBtn,
     autoEl,
+    turnOnAutoBtn,
+    ruleSetEl,
     persistEl,
     agentEl,
     folderEl,
@@ -663,6 +907,27 @@ function updateRow(entry, session) {
   // AUTO ON marker badge
   if (entry.autoEl) {
     entry.autoEl.className = `session-auto-badge ${session.auto ? '' : 'hidden'}`;
+  }
+
+  // Turn on auto-accept button
+  if (entry.turnOnAutoBtn) {
+    entry.turnOnAutoBtn.className = `btn-turn-on-auto ${session.auto ? 'hidden' : ''}`.trim();
+    const isAllowed = Boolean(currentConfig.allowTurnOnFromWindow);
+    entry.turnOnAutoBtn.disabled = !isAllowed;
+    if (!isAllowed) {
+      entry.turnOnAutoBtn.classList.add('disabled');
+      entry.turnOnAutoBtn.title = 'Turning on auto-accept from the window is disabled in Settings';
+    } else {
+      entry.turnOnAutoBtn.classList.remove('disabled');
+      entry.turnOnAutoBtn.title = 'Click to configure and enable auto-accept for this session';
+    }
+  }
+
+  // Rule set indicator
+  if (entry.ruleSetEl) {
+    const ruleSetText = session.ruleSet || (session.hasOwnRules ? 'own rules' : 'default rules');
+    entry.ruleSetEl.textContent = ruleSetText;
+    entry.ruleSetEl.title = `Using ${ruleSetText}. Click to view rules.`;
   }
 
   // PERSIST ALLOWED marker badge
@@ -1259,7 +1524,13 @@ function createHistoryCard(prompt, timeFormat) {
 
   const decisionEl = document.createElement('span');
   decisionEl.className = 'card-decision';
-  decisionEl.textContent = `Dry-run: ${prompt.plainDecision || formatPlainDecision(prompt.decision)}`;
+  if (prompt.answered_by === 'auto' || prompt.answeredBy === 'auto') {
+    const opt = prompt.answer_key || (prompt.decision && prompt.decision.optionKey) || '1';
+    const r = prompt.rule || (prompt.decision && prompt.decision.rule) || 'unknown';
+    decisionEl.textContent = `Auto-approved option ${opt} (rule: ${r})`;
+  } else {
+    decisionEl.textContent = `Dry-run: ${prompt.plainDecision || formatPlainDecision(prompt.decision)}`;
+  }
   decisionLine.appendChild(decisionEl);
 
   if (prompt.agreement === 'agrees') {
@@ -1304,6 +1575,12 @@ function updateSettingsTab() {
   if (settingAutoPaused && document.activeElement !== settingAutoPaused) {
     settingAutoPaused.checked = Boolean(currentConfig.autoPaused);
   }
+  if (settingAutoAcceptDefault && document.activeElement !== settingAutoAcceptDefault) {
+    settingAutoAcceptDefault.checked = Boolean(currentConfig.autoAcceptDefault);
+  }
+  if (settingAllowTurnOn && document.activeElement !== settingAllowTurnOn) {
+    settingAllowTurnOn.checked = Boolean(currentConfig.allowTurnOnFromWindow);
+  }
   if (settingTimeFormat && document.activeElement !== settingTimeFormat) {
     settingTimeFormat.value = currentConfig.timeFormat || '24-hour';
   }
@@ -1314,21 +1591,39 @@ function updateSettingsTab() {
 // -------------------------------------------------------------
 
 // Tabs Navigation
-if (tabBtnAgents && tabBtnSettings && agentsView && settingsView) {
-  tabBtnAgents.addEventListener('click', () => {
-    tabBtnAgents.classList.add('active');
-    tabBtnSettings.classList.remove('active');
-    agentsView.style.display = 'flex';
-    settingsView.style.display = 'none';
-  });
+function switchTab(activeTab) {
+  if (tabBtnAgents) {
+    if (activeTab === 'agents') tabBtnAgents.classList.add('active');
+    else tabBtnAgents.classList.remove('active');
+  }
+  if (tabBtnRules) {
+    if (activeTab === 'rules') tabBtnRules.classList.add('active');
+    else tabBtnRules.classList.remove('active');
+  }
+  if (tabBtnSettings) {
+    if (activeTab === 'settings') tabBtnSettings.classList.add('active');
+    else tabBtnSettings.classList.remove('active');
+  }
 
-  tabBtnSettings.addEventListener('click', () => {
-    tabBtnSettings.classList.add('active');
-    tabBtnAgents.classList.remove('active');
-    agentsView.style.display = 'none';
-    settingsView.style.display = 'flex';
+  if (agentsView) agentsView.style.display = activeTab === 'agents' ? 'flex' : 'none';
+  if (rulesView) rulesView.style.display = activeTab === 'rules' ? 'flex' : 'none';
+  if (settingsView) settingsView.style.display = activeTab === 'settings' ? 'flex' : 'none';
+
+  if (activeTab === 'rules') {
+    loadRulesView();
+  } else if (activeTab === 'settings') {
     updateSettingsTab();
-  });
+  }
+}
+
+if (tabBtnAgents) {
+  tabBtnAgents.addEventListener('click', () => switchTab('agents'));
+}
+if (tabBtnRules) {
+  tabBtnRules.addEventListener('click', () => switchTab('rules'));
+}
+if (tabBtnSettings) {
+  tabBtnSettings.addEventListener('click', () => switchTab('settings'));
 }
 
 // Clear History Button
@@ -1372,9 +1667,21 @@ if (pinCheckbox) {
 // Settings tab listeners
 if (settingAutoOpen) {
   settingAutoOpen.addEventListener('change', (e) => {
-    currentConfig.autoOpenWindow = e.target.checked;
+    const val = e.target.checked;
+    currentConfig.autoOpenWindow = val;
     if (window.agentwatch && window.agentwatch.setSetting) {
-      window.agentwatch.setSetting('autoOpenWindow', e.target.checked);
+      Promise.resolve(window.agentwatch.setSetting('autoOpenWindow', val)).then((res) => {
+        if (!res || res.success) showToast('Saved');
+        else {
+          currentConfig.autoOpenWindow = !val;
+          settingAutoOpen.checked = !val;
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+        }
+      }).catch((err) => {
+        currentConfig.autoOpenWindow = !val;
+        settingAutoOpen.checked = !val;
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
     }
   });
 }
@@ -1391,9 +1698,21 @@ if (settingPinTop) {
 
 if (settingNotifications) {
   settingNotifications.addEventListener('change', (e) => {
-    currentConfig.notifications = e.target.checked;
+    const val = e.target.checked;
+    currentConfig.notifications = val;
     if (window.agentwatch && window.agentwatch.setSetting) {
-      window.agentwatch.setSetting('notifications', e.target.checked);
+      Promise.resolve(window.agentwatch.setSetting('notifications', val)).then((res) => {
+        if (!res || res.success) showToast('Saved');
+        else {
+          currentConfig.notifications = !val;
+          settingNotifications.checked = !val;
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+        }
+      }).catch((err) => {
+        currentConfig.notifications = !val;
+        settingNotifications.checked = !val;
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
     }
   });
 }
@@ -1401,34 +1720,156 @@ if (settingNotifications) {
 // Pause auto-accept checkboxes (global toggle in header and setting item)
 if (pauseCheckbox) {
   pauseCheckbox.addEventListener('change', (e) => {
-    currentConfig.autoPaused = e.target.checked;
-    if (settingAutoPaused) settingAutoPaused.checked = e.target.checked;
+    const val = e.target.checked;
+    currentConfig.autoPaused = val;
+    if (settingAutoPaused) settingAutoPaused.checked = val;
     if (window.agentwatch && window.agentwatch.setSetting) {
-      window.agentwatch.setSetting('autoPaused', e.target.checked);
+      Promise.resolve(window.agentwatch.setSetting('autoPaused', val)).then((res) => {
+        if (!res || res.success) showToast('Saved');
+        else {
+          currentConfig.autoPaused = !val;
+          pauseCheckbox.checked = !val;
+          if (settingAutoPaused) settingAutoPaused.checked = !val;
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+        }
+      }).catch((err) => {
+        currentConfig.autoPaused = !val;
+        pauseCheckbox.checked = !val;
+        if (settingAutoPaused) settingAutoPaused.checked = !val;
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
     }
   });
 }
 
 if (settingAutoPaused) {
   settingAutoPaused.addEventListener('change', (e) => {
-    currentConfig.autoPaused = e.target.checked;
-    if (pauseCheckbox) pauseCheckbox.checked = e.target.checked;
+    const val = e.target.checked;
+    currentConfig.autoPaused = val;
+    if (pauseCheckbox) pauseCheckbox.checked = val;
     if (window.agentwatch && window.agentwatch.setSetting) {
-      window.agentwatch.setSetting('autoPaused', e.target.checked);
+      Promise.resolve(window.agentwatch.setSetting('autoPaused', val)).then((res) => {
+        if (!res || res.success) showToast('Saved');
+        else {
+          currentConfig.autoPaused = !val;
+          settingAutoPaused.checked = !val;
+          if (pauseCheckbox) pauseCheckbox.checked = !val;
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+        }
+      }).catch((err) => {
+        currentConfig.autoPaused = !val;
+        settingAutoPaused.checked = !val;
+        if (pauseCheckbox) pauseCheckbox.checked = !val;
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
     }
   });
 }
 
 if (settingTimeFormat) {
   settingTimeFormat.addEventListener('change', (e) => {
-    currentConfig.timeFormat = e.target.value;
+    const val = e.target.value;
+    currentConfig.timeFormat = val;
     if (window.agentwatch && window.agentwatch.setSetting) {
-      window.agentwatch.setSetting('timeFormat', e.target.value);
+      Promise.resolve(window.agentwatch.setSetting('timeFormat', val)).then((res) => {
+        if (!res || res.success) showToast('Saved');
+        else showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+      }).catch((err) => {
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
     }
     // Re-render history with new time format immediately
     if (selectedAgentKey && historyEvents.length > 0) {
       renderHistory(historyEvents);
     }
+  });
+}
+
+// Stage 6: Auto-accept settings listeners
+if (settingAutoAcceptDefault) {
+  settingAutoAcceptDefault.addEventListener('change', (e) => {
+    const val = e.target.checked;
+    currentConfig.autoAcceptDefault = val;
+    if (window.agentwatch && window.agentwatch.setSetting) {
+      Promise.resolve(window.agentwatch.setSetting('autoAcceptDefault', val)).then((res) => {
+        if (!res || res.success) {
+          showToast('Saved');
+        } else {
+          currentConfig.autoAcceptDefault = !val;
+          settingAutoAcceptDefault.checked = !val;
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+        }
+      }).catch((err) => {
+        currentConfig.autoAcceptDefault = !val;
+        settingAutoAcceptDefault.checked = !val;
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
+    }
+  });
+}
+
+if (settingAllowTurnOn) {
+  settingAllowTurnOn.addEventListener('change', (e) => {
+    const val = e.target.checked;
+    currentConfig.allowTurnOnFromWindow = val;
+    if (window.agentwatch && window.agentwatch.setSetting) {
+      Promise.resolve(window.agentwatch.setSetting('allowTurnOnFromWindow', val)).then((res) => {
+        if (!res || res.success) {
+          showToast('Saved');
+        } else {
+          currentConfig.allowTurnOnFromWindow = !val;
+          settingAllowTurnOn.checked = !val;
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+        }
+      }).catch((err) => {
+        currentConfig.allowTurnOnFromWindow = !val;
+        settingAllowTurnOn.checked = !val;
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
+    }
+    // Update enabled/disabled state of Turn On buttons for all live session rows
+    if (currentSessions && currentSessions.length > 0) {
+      currentSessions.forEach(session => {
+        const entry = rowCache.get(session.sessionKey);
+        if (entry) updateRow(entry, session);
+      });
+    }
+  });
+}
+
+// Stage 6: Turn on confirmation modal listeners
+if (turnOnStartInput && turnOnConfirmBtn) {
+  turnOnStartInput.addEventListener('input', () => {
+    turnOnConfirmBtn.disabled = (turnOnStartInput.value.trim() !== 'START');
+  });
+}
+
+if (turnOnCancelBtn) {
+  turnOnCancelBtn.addEventListener('click', () => {
+    if (turnOnModal) turnOnModal.classList.add('hidden');
+    turnOnTargetSession = null;
+  });
+}
+
+if (turnOnConfirmBtn) {
+  turnOnConfirmBtn.addEventListener('click', () => {
+    if (!turnOnTargetSession || !turnOnTargetSession.sessionId) return;
+    if (turnOnStartInput && turnOnStartInput.value.trim() !== 'START') return;
+
+    const sess = turnOnTargetSession;
+    if (window.agentwatch && window.agentwatch.setSessionAuto) {
+      window.agentwatch.setSessionAuto({
+        sessionId: sess.sessionId,
+        state: 'on'
+      }).then(res => {
+        if (res && res.success) {
+          showToast(`Auto-accept turned on for ${sess.folder || 'session'}`);
+        }
+      }).catch(() => {});
+    }
+
+    if (turnOnModal) turnOnModal.classList.add('hidden');
+    turnOnTargetSession = null;
   });
 }
 
@@ -1510,6 +1951,1209 @@ if (typeof window !== 'undefined' && window.agentwatch) {
   }
 }
 
+// =============================================================
+// RULES TAB CONTROLLER
+// =============================================================
+
+let savedRules = null;
+let workingRules = null;
+let rulesBackups = [];
+let pendingLooseningSave = null;
+
+// Rules Tab DOM Elements
+const rulesUnsavedBadge = getEl('rules-unsaved-badge');
+const rulesPersistBadge = getEl('rules-persist-badge');
+const rulesSaveBtn = getEl('rules-save-btn');
+const rulesDiscardBtn = getEl('rules-discard-btn');
+const rulesRestoreBtn = getEl('rules-restore-btn');
+const rulesResetDangerBtn = getEl('rules-reset-danger-btn');
+
+// Option Rules Elements
+const addOptionRuleBtn = getEl('add-option-rule-btn');
+const optionRulesContainer = getEl('option-rules-container');
+
+// Danger List Elements
+const dangerListTbody = getEl('danger-list-tbody');
+const newDangerText = getEl('new-danger-text');
+const newDangerWord = getEl('new-danger-word');
+const newDangerLevel = getEl('new-danger-level');
+const newDangerDelay = getEl('new-danger-delay');
+const addDangerBtn = getEl('add-danger-btn');
+
+// Deny List Elements
+const denyListContainer = getEl('deny-list-container');
+const newDenyPattern = getEl('new-deny-pattern');
+const addDenyBtn = getEl('add-deny-btn');
+
+// Allow List Elements
+const tier1AllowList = getEl('tier1-allow-list');
+const tier2AllowList = getEl('tier2-allow-list');
+
+// Try It Tester Elements
+const samplePromptSelect = getEl('sample-prompt-select');
+const testerCmd = getEl('tester-cmd');
+const testerQuestion = getEl('tester-question');
+const testerOptions = getEl('tester-options');
+const testerEvalBtn = getEl('tester-eval-btn');
+const testerDecisionBadge = getEl('tester-decision-badge');
+const testerDecisionDetails = getEl('tester-decision-details');
+
+// Modals
+const looseningModal = getEl('loosening-modal');
+const looseningItemsList = getEl('loosening-items-list');
+const persistWarningBox = getEl('persist-warning-box');
+const looseningPersistInput = getEl('loosening-persist-input');
+const looseningConfirmBtn = getEl('loosening-confirm-btn');
+const looseningCancelBtn = getEl('loosening-cancel-btn');
+
+const restoreModal = getEl('restore-modal');
+const restoreBackupSelect = getEl('restore-backup-select');
+const restoreConfirmBtn = getEl('restore-confirm-btn');
+const restoreCancelBtn = getEl('restore-cancel-btn');
+
+/**
+ * Generates a plain-language preview of an option rule.
+ * Example: "Presses the option that starts with 'Yes, and always' for commands that start with 'git'"
+ */
+function generateRulePreview(rule) {
+  if (!rule) return '';
+  const starts = rule.startsWith ? `starts with "${rule.startsWith}"` : 'any text';
+  const ends = rule.endsWith ? ` and ends with "${rule.endsWith}"` : '';
+  const cmd = rule.commandStartsWith ? `for commands that start with "${rule.commandStartsWith}"` : 'for all commands';
+  const persist = rule.allowPersist ? ' (allows persist)' : '';
+  const disabled = rule.enabled === false ? ' [Disabled]' : '';
+  return `Presses the option that ${starts}${ends} ${cmd}${persist}${disabled}.`;
+}
+
+/**
+ * Validates a single option rule draft, returning error message or null.
+ */
+function validateOptionRuleDraft(rule) {
+  if (!rule) return 'Rule is undefined';
+  if (!rule.name || rule.name.trim() === '') return 'Rule name cannot be empty';
+  if (!rule.startsWith || rule.startsWith.trim().length < 3) return 'Starts with must be at least 3 characters';
+  if (/^(?:no\b|cancel\b|abort\b|reject\b)/i.test(rule.startsWith.trim())) {
+    return 'Cannot match "No" options';
+  }
+  if (rule.endsWith !== undefined && rule.endsWith.trim() === '') return 'Ends with cannot be empty';
+  if (rule.commandStartsWith !== undefined && rule.commandStartsWith.trim() === '') return 'Command starts with cannot be empty';
+  return null;
+}
+
+/**
+ * Checks if working draft has unsaved changes compared to savedRules.
+ */
+function hasUnsavedChanges() {
+  if (!savedRules || !workingRules) return false;
+  return JSON.stringify(savedRules) !== JSON.stringify(workingRules);
+}
+
+/**
+ * Checks all working rules for inline validation errors.
+ */
+function getWorkingRulesValidationErrors() {
+  const errors = [];
+  if (!workingRules) return errors;
+
+  if (Array.isArray(workingRules.optionRules)) {
+    workingRules.optionRules.forEach((rule, idx) => {
+      const err = validateOptionRuleDraft(rule);
+      if (err) errors.push(`Option rule #${idx + 1} (${rule.name || 'unnamed'}): ${err}`);
+    });
+  }
+
+  if (Array.isArray(workingRules.danger)) {
+    workingRules.danger.forEach((entry, idx) => {
+      if (!entry.text || entry.text.trim().length < 2) {
+        errors.push(`Danger entry #${idx + 1}: text must be at least 2 characters`);
+      }
+      if (entry.level === 'slow' && (typeof entry.delay !== 'number' || entry.delay <= 0)) {
+        errors.push(`Danger entry #${idx + 1}: delay must be a positive number`);
+      }
+    });
+  }
+
+  return errors;
+}
+
+/**
+ * Updates top action bar indicators (unsaved badge, persist allowed badge, save button disabled).
+ */
+function updateRulesTopBar() {
+  const unsaved = hasUnsavedChanges();
+  if (rulesUnsavedBadge) {
+    rulesUnsavedBadge.classList.toggle('hidden', !unsaved);
+  }
+
+  const hasPersistAllowed = workingRules && Array.isArray(workingRules.optionRules) &&
+    workingRules.optionRules.some(r => r && r.allowPersist === true);
+  if (rulesPersistBadge) {
+    rulesPersistBadge.classList.toggle('hidden', !hasPersistAllowed);
+  }
+
+  const errors = getWorkingRulesValidationErrors();
+  if (rulesSaveBtn) {
+    rulesSaveBtn.disabled = errors.length > 0;
+    rulesSaveBtn.title = errors.length > 0 ? errors.join('\n') : (unsaved ? 'Save changes' : 'No unsaved changes');
+  }
+}
+
+function refreshRulesFolderSelect() {
+  if (!rulesTargetSelect || !window.agentwatch || !window.agentwatch.getRulesFolders) return;
+  window.agentwatch.getRulesFolders().then(res => {
+    if (!res || !res.success || !Array.isArray(res.folders)) return;
+    const currentVal = rulesTargetSelect.value || currentRulesTarget || 'default';
+    rulesTargetSelect.innerHTML = '';
+
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = 'default';
+    defaultOpt.textContent = 'Default rules';
+    rulesTargetSelect.appendChild(defaultOpt);
+
+    for (const f of res.folders) {
+      const opt = document.createElement('option');
+      opt.value = f.folderKey;
+      opt.textContent = `${f.agent} in ${f.folderName}`;
+      rulesTargetSelect.appendChild(opt);
+    }
+
+    if (Array.from(rulesTargetSelect.options).some(o => o.value === currentVal)) {
+      rulesTargetSelect.value = currentVal;
+    } else {
+      rulesTargetSelect.value = 'default';
+      currentRulesTarget = 'default';
+    }
+  }).catch(() => {});
+}
+
+/**
+ * Loads rules from the main process.
+ */
+function loadRulesView() {
+  refreshRulesFolderSelect();
+  if (!window.agentwatch) return;
+
+  if (currentRulesTarget === 'default') {
+    if (resetFolderRulesBtn) resetFolderRulesBtn.style.display = 'none';
+    if (window.agentwatch.getRules) {
+      window.agentwatch.getRules().then(res => {
+        if (res && res.success) {
+          savedRules = res.rules;
+          workingRules = JSON.parse(JSON.stringify(res.rules));
+          rulesBackups = res.backups || [];
+          renderRulesView();
+        }
+      }).catch(() => {});
+    }
+  } else {
+    if (window.agentwatch.getFolderRules) {
+      window.agentwatch.getFolderRules(currentRulesTarget).then(res => {
+        if (res && res.success) {
+          currentTargetHasOwnRules = Boolean(res.hasOwnRules);
+          if (resetFolderRulesBtn) {
+            resetFolderRulesBtn.style.display = currentTargetHasOwnRules ? 'inline-block' : 'none';
+          }
+          savedRules = res.rules;
+          workingRules = JSON.parse(JSON.stringify(res.rules));
+          rulesBackups = res.backups || [];
+          renderRulesView();
+        }
+      }).catch(() => {});
+    }
+  }
+}
+
+if (rulesTargetSelect) {
+  rulesTargetSelect.addEventListener('change', () => {
+    if (hasUnsavedChanges()) {
+      const ok = window.confirm('You have unsaved changes. Discard them and switch rules view?');
+      if (!ok) {
+        rulesTargetSelect.value = currentRulesTarget;
+        return;
+      }
+    }
+    currentRulesTarget = rulesTargetSelect.value;
+    loadRulesView();
+  });
+}
+
+if (resetFolderRulesBtn) {
+  resetFolderRulesBtn.addEventListener('click', () => {
+    if (currentRulesTarget === 'default') return;
+    const ok = window.confirm('Reset this folder to default rules? This will delete this folder\'s custom rule list.');
+    if (!ok) return;
+
+    if (window.agentwatch && window.agentwatch.deleteFolderRules) {
+      window.agentwatch.deleteFolderRules(currentRulesTarget).then(res => {
+        if (res && res.success) {
+          currentTargetHasOwnRules = false;
+          if (resetFolderRulesBtn) resetFolderRulesBtn.style.display = 'none';
+          loadRulesView();
+        } else {
+          alert(`Error resetting folder rules: ${res ? res.error : 'Unknown error'}`);
+        }
+      });
+    }
+  });
+}
+
+/**
+ * Renders the entire Rules tab.
+ */
+function renderRulesView() {
+  if (!workingRules) return;
+  renderOptionRules();
+  renderDangerList();
+  renderDenyList();
+  renderAllowList();
+  updateRulesTopBar();
+}
+
+/**
+ * Renders the ordered Option Rules list with drag-to-reorder, inputs, and preview.
+ */
+function renderOptionRules() {
+  if (!optionRulesContainer || !workingRules) return;
+  optionRulesContainer.innerHTML = '';
+
+  const rules = workingRules.optionRules || [];
+  if (rules.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-rules-msg';
+    empty.textContent = 'No option rules configured. Click "+ Add Option Rule" to create one.';
+    optionRulesContainer.appendChild(empty);
+    return;
+  }
+
+  rules.forEach((rule, index) => {
+    const card = document.createElement('div');
+    card.className = `option-rule-item ${rule.enabled === false ? 'disabled' : ''}`;
+    card.draggable = true;
+    card.dataset.index = String(index);
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'option-rule-header';
+
+    const headerLeft = document.createElement('div');
+    headerLeft.className = 'rule-header-left';
+
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'drag-handle';
+    dragHandle.innerHTML = '⋮⋮';
+    dragHandle.title = 'Drag to reorder priority';
+
+    const priorityPill = document.createElement('span');
+    priorityPill.className = 'priority-pill';
+    priorityPill.textContent = `#${index + 1}`;
+
+    const enabledCheckbox = document.createElement('input');
+    enabledCheckbox.type = 'checkbox';
+    enabledCheckbox.checked = rule.enabled !== false;
+    enabledCheckbox.title = 'Toggle rule enabled';
+    enabledCheckbox.addEventListener('change', () => {
+      rule.enabled = enabledCheckbox.checked;
+      renderRulesView();
+    });
+
+    const nameTitle = document.createElement('span');
+    nameTitle.className = 'rule-name-title';
+    nameTitle.textContent = rule.name || 'Unnamed Rule';
+
+    headerLeft.appendChild(dragHandle);
+    headerLeft.appendChild(priorityPill);
+    headerLeft.appendChild(enabledCheckbox);
+    headerLeft.appendChild(nameTitle);
+
+    const headerRight = document.createElement('div');
+    headerRight.className = 'rule-header-right';
+
+    // Move up button
+    if (index > 0) {
+      const upBtn = document.createElement('button');
+      upBtn.type = 'button';
+      upBtn.className = 'btn btn-secondary btn-sm';
+      upBtn.textContent = '↑';
+      upBtn.title = 'Move higher priority';
+      upBtn.addEventListener('click', () => {
+        const temp = workingRules.optionRules[index];
+        workingRules.optionRules[index] = workingRules.optionRules[index - 1];
+        workingRules.optionRules[index - 1] = temp;
+        renderRulesView();
+      });
+      headerRight.appendChild(upBtn);
+    }
+
+    // Move down button
+    if (index < rules.length - 1) {
+      const downBtn = document.createElement('button');
+      downBtn.type = 'button';
+      downBtn.className = 'btn btn-secondary btn-sm';
+      downBtn.textContent = '↓';
+      downBtn.title = 'Move lower priority';
+      downBtn.addEventListener('click', () => {
+        const temp = workingRules.optionRules[index];
+        workingRules.optionRules[index] = workingRules.optionRules[index + 1];
+        workingRules.optionRules[index + 1] = temp;
+        renderRulesView();
+      });
+      headerRight.appendChild(downBtn);
+    }
+
+    // Delete button
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn btn-danger btn-sm';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', () => {
+      workingRules.optionRules.splice(index, 1);
+      renderRulesView();
+    });
+    headerRight.appendChild(deleteBtn);
+
+    header.appendChild(headerLeft);
+    header.appendChild(headerRight);
+    card.appendChild(header);
+
+    // Plain-language preview
+    const previewEl = document.createElement('div');
+    previewEl.className = 'rule-preview';
+    previewEl.textContent = generateRulePreview(rule);
+    card.appendChild(previewEl);
+
+    // Inline error message container
+    const errorEl = document.createElement('div');
+    errorEl.className = 'rule-error-msg';
+    const errorMsg = validateOptionRuleDraft(rule);
+    if (errorMsg) {
+      errorEl.textContent = errorMsg;
+    }
+    card.appendChild(errorEl);
+
+    // Fields Grid
+    const fieldsGrid = document.createElement('div');
+    fieldsGrid.className = 'rule-fields-grid';
+
+    // Name field
+    const nameGroup = document.createElement('div');
+    nameGroup.className = 'form-group';
+    const nameLabel = document.createElement('label');
+    nameLabel.className = 'form-label';
+    nameLabel.textContent = 'Rule Name:';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'form-input';
+    nameInput.value = rule.name || '';
+    nameInput.addEventListener('input', () => {
+      rule.name = nameInput.value;
+      nameTitle.textContent = rule.name || 'Unnamed Rule';
+      previewEl.textContent = generateRulePreview(rule);
+      const err = validateOptionRuleDraft(rule);
+      errorEl.textContent = err || '';
+      updateRulesTopBar();
+    });
+    nameGroup.appendChild(nameLabel);
+    nameGroup.appendChild(nameInput);
+    fieldsGrid.appendChild(nameGroup);
+
+    // Starts with field
+    const startsGroup = document.createElement('div');
+    startsGroup.className = 'form-group';
+    const startsLabel = document.createElement('label');
+    startsLabel.className = 'form-label';
+    startsLabel.textContent = 'Starts with (min 3 chars):';
+    const startsInput = document.createElement('input');
+    startsInput.type = 'text';
+    startsInput.className = 'form-input';
+    startsInput.value = rule.startsWith || '';
+    startsInput.addEventListener('input', () => {
+      rule.startsWith = startsInput.value;
+      previewEl.textContent = generateRulePreview(rule);
+      const err = validateOptionRuleDraft(rule);
+      errorEl.textContent = err || '';
+      updateRulesTopBar();
+    });
+    startsGroup.appendChild(startsLabel);
+    startsGroup.appendChild(startsInput);
+    fieldsGrid.appendChild(startsGroup);
+
+    // Ends with field
+    const endsGroup = document.createElement('div');
+    endsGroup.className = 'form-group';
+    const endsLabel = document.createElement('label');
+    endsLabel.className = 'form-label';
+    endsLabel.textContent = 'Ends with (optional):';
+    const endsInput = document.createElement('input');
+    endsInput.type = 'text';
+    endsInput.className = 'form-input';
+    endsInput.value = rule.endsWith || '';
+    endsInput.placeholder = 'None';
+    endsInput.addEventListener('input', () => {
+      rule.endsWith = endsInput.value.trim() !== '' ? endsInput.value : undefined;
+      previewEl.textContent = generateRulePreview(rule);
+      const err = validateOptionRuleDraft(rule);
+      errorEl.textContent = err || '';
+      updateRulesTopBar();
+    });
+    endsGroup.appendChild(endsLabel);
+    endsGroup.appendChild(endsInput);
+    fieldsGrid.appendChild(endsGroup);
+
+    // Command starts with field
+    const cmdGroup = document.createElement('div');
+    cmdGroup.className = 'form-group';
+    const cmdLabel = document.createElement('label');
+    cmdLabel.className = 'form-label';
+    cmdLabel.textContent = 'Only for commands starting with:';
+    const cmdInput = document.createElement('input');
+    cmdInput.type = 'text';
+    cmdInput.className = 'form-input';
+    cmdInput.value = rule.commandStartsWith || '';
+    cmdInput.placeholder = 'Any command (looser)';
+    cmdInput.addEventListener('input', () => {
+      rule.commandStartsWith = cmdInput.value.trim() !== '' ? cmdInput.value : undefined;
+      previewEl.textContent = generateRulePreview(rule);
+      const err = validateOptionRuleDraft(rule);
+      errorEl.textContent = err || '';
+      updateRulesTopBar();
+    });
+    cmdGroup.appendChild(cmdLabel);
+    cmdGroup.appendChild(cmdInput);
+    fieldsGrid.appendChild(cmdGroup);
+
+    // Allow persist checkbox
+    const persistGroup = document.createElement('div');
+    persistGroup.className = 'form-group';
+    persistGroup.style.justifyContent = 'flex-end';
+    const persistLabel = document.createElement('label');
+    persistLabel.className = 'checkbox-inline';
+    const persistCheckbox = document.createElement('input');
+    persistCheckbox.type = 'checkbox';
+    persistCheckbox.checked = Boolean(rule.allowPersist);
+    persistCheckbox.addEventListener('change', () => {
+      rule.allowPersist = persistCheckbox.checked;
+      previewEl.textContent = generateRulePreview(rule);
+      updateRulesTopBar();
+    });
+    persistLabel.appendChild(persistCheckbox);
+    persistLabel.appendChild(document.createTextNode(' Allow Persist'));
+    persistGroup.appendChild(persistLabel);
+    fieldsGrid.appendChild(persistGroup);
+
+    card.appendChild(fieldsGrid);
+
+    // Drag and drop event listeners
+    card.addEventListener('dragstart', (e) => {
+      if (e.dataTransfer && e.dataTransfer.setData) {
+        e.dataTransfer.setData('text/plain', String(index));
+      }
+      card.classList.add('dragging');
+    });
+
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+    });
+
+    card.addEventListener('dragover', (e) => {
+      e.preventDefault();
+    });
+
+    card.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const fromData = e.dataTransfer ? e.dataTransfer.getData('text/plain') : null;
+      const fromIndex = parseInt(fromData, 10);
+      const toIndex = index;
+      if (!isNaN(fromIndex) && fromIndex !== toIndex && fromIndex >= 0 && fromIndex < rules.length) {
+        const movedRule = workingRules.optionRules.splice(fromIndex, 1)[0];
+        workingRules.optionRules.splice(toIndex, 0, movedRule);
+        renderRulesView();
+      }
+    });
+
+    optionRulesContainer.appendChild(card);
+  });
+}
+
+/**
+ * Renders the danger list table.
+ */
+function renderDangerList() {
+  if (!dangerListTbody || !workingRules) return;
+  dangerListTbody.innerHTML = '';
+
+  const danger = workingRules.danger || [];
+  danger.forEach((entry, index) => {
+    const tr = document.createElement('tr');
+
+    // Pattern Text
+    const tdText = document.createElement('td');
+    tdText.textContent = entry.text;
+    tr.appendChild(tdText);
+
+    // Whole Word checkbox
+    const tdWord = document.createElement('td');
+    const wordCb = document.createElement('input');
+    wordCb.type = 'checkbox';
+    wordCb.checked = Boolean(entry.wholeWord);
+    wordCb.addEventListener('change', () => {
+      entry.wholeWord = wordCb.checked;
+      updateRulesTopBar();
+    });
+    tdWord.appendChild(wordCb);
+    tr.appendChild(tdWord);
+
+    // Level select
+    const tdLevel = document.createElement('td');
+    const levelSelect = document.createElement('select');
+    levelSelect.className = 'form-select form-select-sm';
+    const optHard = document.createElement('option');
+    optHard.value = 'hard';
+    optHard.textContent = 'Hard stop';
+    const optSlow = document.createElement('option');
+    optSlow.value = 'slow';
+    optSlow.textContent = 'Slow down';
+    levelSelect.appendChild(optHard);
+    levelSelect.appendChild(optSlow);
+    levelSelect.value = entry.level === 'slow' ? 'slow' : 'hard';
+    tdLevel.appendChild(levelSelect);
+    tr.appendChild(tdLevel);
+
+    // Delay
+    const tdDelay = document.createElement('td');
+    const delayInput = document.createElement('input');
+    delayInput.type = 'number';
+    delayInput.min = '1';
+    delayInput.max = '60';
+    delayInput.className = 'form-input form-input-sm delay-input';
+    delayInput.value = entry.delay || 5;
+    delayInput.disabled = entry.level !== 'slow';
+    delayInput.addEventListener('input', () => {
+      const val = parseFloat(delayInput.value);
+      if (!isNaN(val) && val > 0) {
+        entry.delay = val;
+      }
+      updateRulesTopBar();
+    });
+    levelSelect.addEventListener('change', () => {
+      entry.level = levelSelect.value;
+      delayInput.disabled = entry.level !== 'slow';
+      if (entry.level === 'slow' && !entry.delay) {
+        entry.delay = 5;
+      }
+      updateRulesTopBar();
+    });
+    tdDelay.appendChild(delayInput);
+    tr.appendChild(tdDelay);
+
+    // Remove action
+    const tdAction = document.createElement('td');
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn btn-danger btn-sm';
+    removeBtn.textContent = 'Remove';
+    removeBtn.addEventListener('click', () => {
+      workingRules.danger.splice(index, 1);
+      renderDangerList();
+      updateRulesTopBar();
+    });
+    tdAction.appendChild(removeBtn);
+    tr.appendChild(tdAction);
+
+    dangerListTbody.appendChild(tr);
+  });
+}
+
+/**
+ * Renders the deny list tags.
+ */
+function renderDenyList() {
+  if (!denyListContainer || !workingRules) return;
+  denyListContainer.innerHTML = '';
+
+  const deny = workingRules.deny || [];
+  const defaultDenySet = new Set([
+    'rm -rf', 'rmdir /s', 'del /f', 'Remove-Item -Recurse', 'format',
+    'git push --force', 'git reset --hard',
+    'curl.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)',
+    'wget.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)',
+    'powershell -enc', 'sudo', 'chmod 777', '.env', 'settings.json', '.ssh', 'credentials'
+  ]);
+
+  deny.forEach((pattern, index) => {
+    const isBuiltin = defaultDenySet.has(pattern);
+    const tag = document.createElement('span');
+    tag.className = `deny-tag ${isBuiltin ? 'builtin' : ''}`;
+
+    const textSpan = document.createElement('span');
+    textSpan.textContent = pattern;
+    tag.appendChild(textSpan);
+
+    if (isBuiltin) {
+      const lock = document.createElement('span');
+      lock.className = 'lock-badge';
+      lock.title = 'Built-in deny entry (read-only)';
+      lock.textContent = '🔒';
+      tag.appendChild(lock);
+    } else {
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'btn btn-danger btn-sm';
+      delBtn.style.padding = '1px 4px';
+      delBtn.style.fontSize = '10px';
+      delBtn.textContent = '✕';
+      delBtn.title = 'Remove custom deny entry';
+      delBtn.addEventListener('click', () => {
+        workingRules.deny.splice(index, 1);
+        renderDenyList();
+        updateRulesTopBar();
+      });
+      tag.appendChild(delBtn);
+    }
+
+    denyListContainer.appendChild(tag);
+  });
+}
+
+/**
+ * Renders the command allow list (Tier 1 read-only, Tier 2 toggles).
+ */
+function renderAllowList() {
+  if (!workingRules) return;
+  const allow = workingRules.allow || [];
+
+  const tier1Names = new Set(['git-readonly', 'file-list', 'version-check', 'echo-safe']);
+  const tier1Rules = allow.filter(r => tier1Names.has(r.name));
+  const tier2Rules = allow.filter(r => !tier1Names.has(r.name));
+
+  if (tier1AllowList) {
+    tier1AllowList.innerHTML = '';
+    tier1Rules.forEach(r => {
+      const item = document.createElement('div');
+      item.className = 'allow-rule-item';
+
+      const left = document.createElement('div');
+      const name = document.createElement('span');
+      name.className = 'allow-rule-name';
+      name.textContent = r.name;
+      const pattern = document.createElement('span');
+      pattern.className = 'allow-rule-pattern';
+      pattern.textContent = r.pattern;
+      left.appendChild(name);
+      left.appendChild(pattern);
+
+      const right = document.createElement('div');
+      const delayBadge = document.createElement('span');
+      delayBadge.className = 'priority-pill';
+      delayBadge.textContent = `${r.delay || 3}s delay (read-only)`;
+      right.appendChild(delayBadge);
+
+      item.appendChild(left);
+      item.appendChild(right);
+      tier1AllowList.appendChild(item);
+    });
+  }
+
+  if (tier2AllowList) {
+    tier2AllowList.innerHTML = '';
+    tier2Rules.forEach(r => {
+      const item = document.createElement('div');
+      item.className = 'allow-rule-item';
+
+      const left = document.createElement('div');
+      const name = document.createElement('span');
+      name.className = 'allow-rule-name';
+      name.textContent = r.name;
+      const pattern = document.createElement('span');
+      pattern.className = 'allow-rule-pattern';
+      pattern.textContent = r.pattern;
+      left.appendChild(name);
+      left.appendChild(pattern);
+
+      const right = document.createElement('div');
+      const toggleLabel = document.createElement('label');
+      toggleLabel.className = 'checkbox-inline';
+      const toggle = document.createElement('input');
+      toggle.type = 'checkbox';
+      toggle.checked = r.enabled === true;
+      toggle.addEventListener('change', () => {
+        r.enabled = toggle.checked;
+        updateRulesTopBar();
+      });
+      toggleLabel.appendChild(toggle);
+      toggleLabel.appendChild(document.createTextNode(toggle.checked ? ' Enabled' : ' Disabled'));
+      right.appendChild(toggleLabel);
+
+      item.appendChild(left);
+      item.appendChild(right);
+      tier2AllowList.appendChild(item);
+    });
+  }
+}
+
+// Attach event listeners for buttons in Rules tab
+if (addOptionRuleBtn) {
+  addOptionRuleBtn.addEventListener('click', () => {
+    if (!workingRules) return;
+    if (!workingRules.optionRules) workingRules.optionRules = [];
+    const count = workingRules.optionRules.length + 1;
+    workingRules.optionRules.push({
+      name: `custom-rule-${count}`,
+      startsWith: 'Yes, allow',
+      commandStartsWith: '',
+      allowPersist: false,
+      enabled: true
+    });
+    renderRulesView();
+  });
+}
+
+if (addDangerBtn && newDangerText) {
+  addDangerBtn.addEventListener('click', () => {
+    const text = (newDangerText.value || '').trim();
+    if (text.length < 2) {
+      alert('Danger text must be at least 2 characters');
+      return;
+    }
+    const isWholeWord = newDangerWord ? newDangerWord.checked : false;
+    const level = newDangerLevel ? newDangerLevel.value : 'hard';
+    const delay = newDangerDelay ? parseFloat(newDangerDelay.value) || 5 : 5;
+
+    if (!workingRules.danger) workingRules.danger = [];
+    workingRules.danger.push({
+      text,
+      wholeWord: isWholeWord,
+      level,
+      delay,
+      enabled: true
+    });
+
+    newDangerText.value = '';
+    renderDangerList();
+    updateRulesTopBar();
+  });
+
+  if (newDangerLevel && newDangerDelay) {
+    newDangerLevel.addEventListener('change', () => {
+      newDangerDelay.style.display = newDangerLevel.value === 'slow' ? 'inline-block' : 'none';
+    });
+  }
+}
+
+if (addDenyBtn && newDenyPattern) {
+  addDenyBtn.addEventListener('click', () => {
+    const pattern = (newDenyPattern.value || '').trim();
+    if (pattern.length < 2) {
+      alert('Deny pattern must be at least 2 characters');
+      return;
+    }
+    if (!workingRules.deny) workingRules.deny = [];
+    workingRules.deny.push(pattern);
+    newDenyPattern.value = '';
+    renderDenyList();
+    updateRulesTopBar();
+  });
+}
+
+if (rulesDiscardBtn) {
+  rulesDiscardBtn.addEventListener('click', () => {
+    if (!savedRules) return;
+    workingRules = JSON.parse(JSON.stringify(savedRules));
+    renderRulesView();
+  });
+}
+
+if (rulesSaveBtn) {
+  rulesSaveBtn.addEventListener('click', () => {
+    if (!workingRules) return;
+    const errors = getWorkingRulesValidationErrors();
+    if (errors.length > 0) {
+      alert(`Cannot save rules due to errors:\n${errors.join('\n')}`);
+      return;
+    }
+
+    if (currentRulesTarget === 'default') {
+      if (window.agentwatch && window.agentwatch.saveRules) {
+        window.agentwatch.saveRules({ rules: workingRules, confirmedLoosening: false }).then(res => {
+          if (!res) return;
+          if (res.needsConfirmation) {
+            // Open loosening confirmation modal!
+            pendingLooseningSave = workingRules;
+            openLooseningModal(res.loosening);
+          } else if (res.success) {
+            savedRules = res.rules;
+            workingRules = JSON.parse(JSON.stringify(res.rules));
+            rulesBackups = res.backups || [];
+            renderRulesView();
+          } else {
+            alert(`Error saving rules: ${res.error || (res.errors && res.errors.join(', '))}`);
+          }
+        });
+      }
+    } else {
+      if (window.agentwatch && window.agentwatch.saveFolderRules) {
+        window.agentwatch.saveFolderRules({
+          folderKey: currentRulesTarget,
+          rules: workingRules,
+          confirmedLoosening: false
+        }).then(res => {
+          if (!res) return;
+          if (res.needsConfirmation) {
+            // Open loosening confirmation modal!
+            pendingLooseningSave = workingRules;
+            openLooseningModal(res.loosening);
+          } else if (res.success) {
+            savedRules = res.rules;
+            workingRules = JSON.parse(JSON.stringify(res.rules));
+            rulesBackups = res.backups || [];
+            currentTargetHasOwnRules = true;
+            if (resetFolderRulesBtn) resetFolderRulesBtn.style.display = 'inline-block';
+            renderRulesView();
+          } else {
+            alert(`Error saving folder rules: ${res.error || (res.errors && res.errors.join(', '))}`);
+          }
+        });
+      }
+    }
+  });
+}
+
+function openLooseningModal(loosening) {
+  if (!looseningModal || !looseningItemsList) return;
+  looseningItemsList.innerHTML = '';
+  (loosening.items || []).forEach(item => {
+    const li = document.createElement('li');
+    li.textContent = item;
+    looseningItemsList.appendChild(li);
+  });
+
+  if (loosening.requiresPersistConfirmation) {
+    if (persistWarningBox) persistWarningBox.classList.remove('hidden');
+    if (looseningPersistInput) {
+      looseningPersistInput.value = '';
+      looseningPersistInput.focus();
+    }
+    if (looseningConfirmBtn) {
+      looseningConfirmBtn.disabled = true;
+    }
+  } else {
+    if (persistWarningBox) persistWarningBox.classList.add('hidden');
+    if (looseningConfirmBtn) {
+      looseningConfirmBtn.disabled = false;
+    }
+  }
+
+  looseningModal.classList.remove('hidden');
+}
+
+if (looseningPersistInput && looseningConfirmBtn) {
+  looseningPersistInput.addEventListener('input', () => {
+    looseningConfirmBtn.disabled = looseningPersistInput.value.trim() !== 'PERSIST';
+  });
+}
+
+if (looseningConfirmBtn) {
+  looseningConfirmBtn.addEventListener('click', () => {
+    if (!pendingLooseningSave) return;
+    if (currentRulesTarget === 'default') {
+      if (window.agentwatch && window.agentwatch.saveRules) {
+        window.agentwatch.saveRules({ rules: pendingLooseningSave, confirmedLoosening: true }).then(res => {
+          if (res && res.success) {
+            savedRules = res.rules;
+            workingRules = JSON.parse(JSON.stringify(res.rules));
+            rulesBackups = res.backups || [];
+            if (looseningModal) looseningModal.classList.add('hidden');
+            pendingLooseningSave = null;
+            renderRulesView();
+          } else {
+            alert(`Error saving rules: ${res ? res.error : 'Unknown error'}`);
+          }
+        });
+      }
+    } else {
+      if (window.agentwatch && window.agentwatch.saveFolderRules) {
+        window.agentwatch.saveFolderRules({
+          folderKey: currentRulesTarget,
+          rules: pendingLooseningSave,
+          confirmedLoosening: true
+        }).then(res => {
+          if (res && res.success) {
+            savedRules = res.rules;
+            workingRules = JSON.parse(JSON.stringify(res.rules));
+            rulesBackups = res.backups || [];
+            currentTargetHasOwnRules = true;
+            if (resetFolderRulesBtn) resetFolderRulesBtn.style.display = 'inline-block';
+            if (looseningModal) looseningModal.classList.add('hidden');
+            pendingLooseningSave = null;
+            renderRulesView();
+          } else {
+            alert(`Error saving folder rules: ${res ? res.error : 'Unknown error'}`);
+          }
+        });
+      }
+    }
+  });
+}
+
+if (looseningCancelBtn && looseningModal) {
+  looseningCancelBtn.addEventListener('click', () => {
+    looseningModal.classList.add('hidden');
+    pendingLooseningSave = null;
+  });
+}
+
+// Restore Modal
+if (rulesRestoreBtn && restoreModal && restoreBackupSelect) {
+  rulesRestoreBtn.addEventListener('click', () => {
+    restoreBackupSelect.innerHTML = '';
+    if (rulesBackups.length === 0) {
+      const opt = document.createElement('option');
+      opt.textContent = 'No previous backups found';
+      opt.disabled = true;
+      restoreBackupSelect.appendChild(opt);
+    } else {
+      rulesBackups.forEach(b => {
+        const opt = document.createElement('option');
+        opt.value = b.name;
+        opt.textContent = `${b.name} (${formatDisplayTime(b.time, currentConfig.timeFormat)})`;
+        restoreBackupSelect.appendChild(opt);
+      });
+    }
+    restoreModal.classList.remove('hidden');
+  });
+}
+
+if (restoreConfirmBtn && restoreBackupSelect) {
+  restoreConfirmBtn.addEventListener('click', () => {
+    const selectedBackup = restoreBackupSelect.value;
+    if (!selectedBackup) return;
+    if (window.agentwatch && window.agentwatch.restoreRules) {
+      window.agentwatch.restoreRules(selectedBackup).then(res => {
+        if (res && res.success) {
+          savedRules = res.rules;
+          workingRules = JSON.parse(JSON.stringify(res.rules));
+          rulesBackups = res.backups || [];
+          if (restoreModal) restoreModal.classList.add('hidden');
+          renderRulesView();
+        } else {
+          alert(`Error restoring backup: ${res ? res.error : 'Unknown error'}`);
+        }
+      });
+    }
+  });
+}
+
+if (restoreCancelBtn && restoreModal) {
+  restoreCancelBtn.addEventListener('click', () => {
+    restoreModal.classList.add('hidden');
+  });
+}
+
+if (rulesResetDangerBtn) {
+  rulesResetDangerBtn.addEventListener('click', () => {
+    const ok = window.confirm('Reset danger list to factory defaults?');
+    if (!ok) return;
+    if (window.agentwatch && window.agentwatch.resetDangerRules) {
+      window.agentwatch.resetDangerRules().then(res => {
+        if (res && res.success) {
+          savedRules = res.rules;
+          workingRules = JSON.parse(JSON.stringify(res.rules));
+          rulesBackups = res.backups || [];
+          renderRulesView();
+        }
+      });
+    }
+  });
+}
+
+// Try-It Tester Logic
+const SAMPLE_PROMPTS = {
+  'git-status': {
+    cmd: 'git status',
+    question: 'Allow command to run?',
+    options: '1. Yes, once\n2. Yes, and always allow in this conversation\n3. No, cancel'
+  },
+  'npm-build': {
+    cmd: 'npm run build',
+    question: 'Allow command to run?',
+    options: '1. Yes, once\n2. Yes, and always allow in this conversation\n3. No, cancel'
+  },
+  'rm-rf': {
+    cmd: 'rm -rf node_modules',
+    question: 'Allow dangerous delete command?',
+    options: '1. Yes, once\n2. No, cancel'
+  },
+  'danger-delete': {
+    cmd: 'git push --delete origin feature',
+    question: 'Allow remote branch delete?',
+    options: '1. Yes, once\n2. No, cancel'
+  },
+  'option-always': {
+    cmd: 'git commit -m "feat: adds feature"',
+    question: 'Allow git commit command?',
+    options: '1. Yes, once\n2. Yes, and always allow in this conversation\n3. No, cancel'
+  },
+  'option-persist': {
+    cmd: 'git diff',
+    question: 'Allow git diff command?',
+    options: '1. Yes, once\n2. Yes, and persist in settings.json\n3. No, cancel'
+  },
+  'choice-which': {
+    cmd: 'git checkout',
+    question: 'Which branch would you like to checkout?',
+    options: '1. main\n2. feature\n3. bugfix'
+  }
+};
+
+if (samplePromptSelect) {
+  samplePromptSelect.addEventListener('change', () => {
+    const key = samplePromptSelect.value;
+    const sample = SAMPLE_PROMPTS[key];
+    if (sample) {
+      if (testerCmd) testerCmd.value = sample.cmd;
+      if (testerQuestion) testerQuestion.value = sample.question;
+      if (testerOptions) testerOptions.value = sample.options;
+    }
+  });
+}
+
+if (testerEvalBtn) {
+  testerEvalBtn.addEventListener('click', () => {
+    const cmd = (testerCmd ? testerCmd.value : '').trim();
+    const question = (testerQuestion ? testerQuestion.value : '').trim();
+    const optionsRaw = (testerOptions ? testerOptions.value : '');
+
+    const lines = optionsRaw.split('\n').map(l => l.trim()).filter(Boolean);
+    const options = lines.map((text, idx) => {
+      const num = idx + 1;
+      const cleanText = text.replace(/^\s*(?:>\s*)?\d+[\s.)-]+/, '').trim();
+      let classification = 'custom';
+      if (/^(?:yes|allow|approve)\b/i.test(cleanText)) {
+        classification = /persist|settings\.json/i.test(cleanText)
+          ? 'yes_persist'
+          : (/always/i.test(cleanText) ? 'yes_session' : 'yes_once');
+      } else if (/^(?:no|cancel|abort|reject)\b/i.test(cleanText)) {
+        classification = 'no';
+      }
+      return {
+        number: num,
+        key: String(num),
+        text,
+        classification
+      };
+    });
+
+    const promptObj = {
+      command: cmd,
+      commandSpaced: cmd,
+      commandCompact: cmd.replace(/\s+/g, ''),
+      question,
+      options
+    };
+
+    if (window.agentwatch && window.agentwatch.evaluatePromptTest) {
+      const rulesToTest = workingRules || savedRules;
+      const customRules = currentRulesTarget !== 'default'
+        ? { ...rulesToTest, isFolderRuleSet: true, folderKey: currentRulesTarget }
+        : rulesToTest;
+      window.agentwatch.evaluatePromptTest({
+        prompt: promptObj,
+        customRules
+      }).then(res => {
+        if (!res || !res.success) {
+          if (testerDecisionBadge) {
+            testerDecisionBadge.className = 'decision-badge badge-neutral';
+            testerDecisionBadge.textContent = 'Error';
+          }
+          if (testerDecisionDetails) {
+            testerDecisionDetails.textContent = res ? res.error : 'Evaluation failed';
+          }
+          return;
+        }
+
+        const decision = res.decision;
+        if (testerDecisionBadge) {
+          if (decision.action === 'would_approve') {
+            testerDecisionBadge.className = 'decision-badge badge-approved';
+            testerDecisionBadge.textContent = 'WOULD APPROVE';
+          } else if (decision.action === 'blocked') {
+            testerDecisionBadge.className = 'decision-badge badge-blocked';
+            testerDecisionBadge.textContent = 'BLOCKED';
+          } else {
+            testerDecisionBadge.className = 'decision-badge badge-needs-user';
+            testerDecisionBadge.textContent = 'NEEDS USER';
+          }
+        }
+
+        if (testerDecisionDetails) {
+          testerDecisionDetails.innerHTML = '';
+          const infoP = document.createElement('p');
+          infoP.style.margin = '0 0 6px 0';
+          if (decision.action === 'would_approve') {
+            const winRule = decision.winningRule || decision.rule;
+            infoP.innerHTML = `<strong>Winning Rule:</strong> ${escapeHtml(winRule)} (${decision.ruleType})<br>` +
+              (decision.skippedRules && decision.skippedRules.length > 0 ? `<strong>Skipped Higher-Priority Rules:</strong> ${escapeHtml(decision.skippedRules.join(', '))}<br>` : '') +
+              `<strong>Option to press:</strong> Option ${escapeHtml(decision.optionKey)} ("${escapeHtml(decision.optionText)}")<br>` +
+              `<strong>Delay:</strong> ${decision.delay}s`;
+          } else if (decision.action === 'blocked') {
+            infoP.innerHTML = `<strong>Blocked by Deny Rule:</strong> "${escapeHtml(decision.rule)}"`;
+          } else {
+            let reasonHtml = `<strong>Reason:</strong> ${escapeHtml(decision.reason)}`;
+            if (decision.winningRule) {
+              reasonHtml += `<br><strong>Winning Rule:</strong> ${escapeHtml(decision.winningRule)}`;
+            }
+            if (decision.skippedRules && decision.skippedRules.length > 0) {
+              reasonHtml += `<br><strong>Skipped Higher-Priority Rules:</strong> ${escapeHtml(decision.skippedRules.join(', '))}`;
+            }
+            infoP.innerHTML = reasonHtml;
+          }
+          testerDecisionDetails.appendChild(infoP);
+
+          // Step trace breakdown
+          const traceDiv = document.createElement('div');
+          traceDiv.className = 'step-trace';
+
+          const denyItem = document.createElement('div');
+          denyItem.className = `step-trace-item ${decision.action === 'blocked' ? 'hit' : 'pass'}`;
+          denyItem.textContent = decision.action === 'blocked' ? `✕ Deny Rule hit: ${decision.rule}` : '✓ Deny check passed';
+          traceDiv.appendChild(denyItem);
+
+          const dangerItem = document.createElement('div');
+          const isDangerHit = decision.danger || (decision.reason && decision.reason.startsWith('DANGER:'));
+          dangerItem.className = `step-trace-item ${isDangerHit ? 'hit' : 'pass'}`;
+          dangerItem.textContent = isDangerHit ? `✕ Danger hit: ${decision.entry || decision.reason}` : (decision.slowDanger ? `⚠ Slow danger matched: ${decision.slowDanger}` : '✓ Danger check passed');
+          traceDiv.appendChild(dangerItem);
+
+          const choiceItem = document.createElement('div');
+          const isChoice = decision.reason && decision.reason.includes('choice question');
+          choiceItem.className = `step-trace-item ${isChoice ? 'hit' : 'pass'}`;
+          choiceItem.textContent = isChoice ? '✕ Choice question detected' : '✓ Prompt is permission question';
+          traceDiv.appendChild(choiceItem);
+
+          if (decision.winningRule || (decision.action === 'would_approve' && decision.rule)) {
+            const ruleItem = document.createElement('div');
+            ruleItem.className = 'step-trace-item pass';
+            ruleItem.textContent = `✓ Winning rule: ${decision.winningRule || decision.rule}`;
+            traceDiv.appendChild(ruleItem);
+          }
+          if (decision.skippedRules && decision.skippedRules.length > 0) {
+            const skippedItem = document.createElement('div');
+            skippedItem.className = 'step-trace-item';
+            skippedItem.textContent = `↷ Skipped higher-priority rules: ${decision.skippedRules.join(', ')}`;
+            traceDiv.appendChild(skippedItem);
+          }
+
+          const evalItem = document.createElement('div');
+          evalItem.className = 'step-trace-item';
+          evalItem.textContent = `Log: ${decision.log || decision.reason || decision.action}`;
+          traceDiv.appendChild(evalItem);
+
+          testerDecisionDetails.appendChild(traceDiv);
+        }
+      });
+    }
+  });
+}
+
 // Export for unit tests
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
@@ -1527,11 +3171,31 @@ if (typeof module !== 'undefined' && module.exports) {
     renderPastAgents,
     renderHistory,
     createHistoryCard,
+    showToast,
+    openTurnOnModal,
     formatDisplayTime,
     formatSessionLength,
     formatPlainDecision,
     getClassificationLabel,
     groupHistoryBySession,
+    generateRulePreview,
+    validateOptionRuleDraft,
+    hasUnsavedChanges,
+    loadRulesView,
+    renderRulesView,
+    renderOptionRules,
+    renderDangerList,
+    renderDenyList,
+    renderAllowList,
+    showNestedFolderBanner,
+    hideNestedFolderBanner,
+    refreshRulesFolderSelect,
+    getCurrentRulesTarget: () => currentRulesTarget,
+    setCurrentRulesTarget: (t) => { currentRulesTarget = t; },
+    getWorkingRules: () => workingRules,
+    setWorkingRules: (r) => { workingRules = r; },
+    getSavedRules: () => savedRules,
+    setSavedRules: (r) => { savedRules = r; },
     getRowCache: () => rowCache,
     getCurrentSessions: () => currentSessions,
     getEditingSessionKey: () => editingSessionKey,

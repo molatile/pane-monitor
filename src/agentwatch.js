@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 let pty;
 try {
   pty = require('node-pty');
@@ -13,7 +14,17 @@ const { Terminal } = require('@xterm/headless');
 const { extractPromptFromScreen, getSelectedOptionNumberFromScreen } = require('./parser');
 const { resolveExecutable } = require('./resolver');
 const { getProfileForCommand, getNoProfileNotice } = require('./profile');
-const { evaluatePrompt, loadRules, isChoiceQuestion } = require('./rules');
+const {
+  evaluatePrompt,
+  loadRules,
+  loadRulesForFolder,
+  getFolderRulesPath,
+  hasFolderRules,
+  loadFolderRules,
+  loadFolderChoices,
+  computeFolderAncestors,
+  isChoiceQuestion
+} = require('./rules');
 const { maskText, maskScreenLines } = require('./masker');
 const { appendHistoryEvent, computeAgreement } = require('./history');
 const { SessionStatusManager } = require('./status');
@@ -28,13 +39,93 @@ function startAgentwatch(options = {}) {
   const command = options.command;
   const commandArgs = options.args || [];
   const record = Boolean(options.record);
-  const rules = loadRules(options.rulesPath);
+
   const profile = options.profile !== undefined ? options.profile : getProfileForCommand(command);
   const hasProfile = Boolean(profile);
   const commandBaseName = command
     ? path.basename(command).replace(/\.(?:exe|cmd|bat)$/i, '').toLowerCase()
     : 'agent';
   const agentName = (profile && profile.id) || commandBaseName;
+
+  const rawCwd = options.cwd || process.cwd();
+  const normalizedCwd = path.resolve(rawCwd);
+  const canonicalCwd = process.platform === 'win32' ? normalizedCwd.toLowerCase() : normalizedCwd;
+  const folderHash = crypto.createHash('sha256').update(canonicalCwd).digest('hex').slice(0, 16);
+  const folderKey = options.sessionKey || `${agentName}:${folderHash}`;
+  const folderRulesDir = options.folderRulesDir;
+  const choicesPath = options.choicesPath;
+  const ancestors = options.ancestors || computeFolderAncestors(rawCwd, agentName);
+
+  // Check for nested folder question at startup
+  let initialPendingQuestion = null;
+  const choices = loadFolderChoices(choicesPath);
+  const savedChoice = choices[folderKey];
+  const hasOwnRules = hasFolderRules(folderKey, folderRulesDir);
+
+  if (!hasOwnRules && (!savedChoice || (!savedChoice.choice && (savedChoice.dismissCount || 0) < 2))) {
+    for (const anc of ancestors) {
+      if (hasFolderRules(anc.key, folderRulesDir)) {
+        const ancRules = loadFolderRules(anc.key, folderRulesDir);
+        const ruleCount = (ancRules && ancRules.optionRules) ? ancRules.optionRules.length : 0;
+        initialPendingQuestion = {
+          type: 'nested_folder_rules',
+          folderKey,
+          folderName: path.basename(rawCwd),
+          ancestorKey: anc.key,
+          ancestorName: anc.name,
+          ruleCount
+        };
+        break;
+      }
+    }
+  }
+
+  const targetRulesPath = options.rulesPath || path.resolve(process.cwd(), 'rules.json');
+  const folderRulesPath = getFolderRulesPath(folderKey, folderRulesDir);
+
+  let lastDefaultRulesMtime = 0;
+  let lastFolderRulesMtime = 0;
+  let lastRulesReloadTime = Date.now();
+  try {
+    if (fs.existsSync(targetRulesPath)) {
+      lastDefaultRulesMtime = fs.statSync(targetRulesPath).mtimeMs;
+    }
+    if (fs.existsSync(folderRulesPath)) {
+      lastFolderRulesMtime = fs.statSync(folderRulesPath).mtimeMs;
+    }
+  } catch (e) {}
+
+  let rules = loadRulesForFolder(folderKey, targetRulesPath, folderRulesDir);
+  let previousRules = null;
+
+  function getEffectiveRules(promptShownTime) {
+    try {
+      let defMtime = 0;
+      let folMtime = 0;
+      if (fs.existsSync(targetRulesPath)) {
+        defMtime = fs.statSync(targetRulesPath).mtimeMs;
+      }
+      if (fs.existsSync(folderRulesPath)) {
+        folMtime = fs.statSync(folderRulesPath).mtimeMs;
+      }
+      if (defMtime > lastDefaultRulesMtime || folMtime > lastFolderRulesMtime) {
+        previousRules = rules;
+        rules = loadRulesForFolder(folderKey, targetRulesPath, folderRulesDir);
+        lastDefaultRulesMtime = defMtime;
+        lastFolderRulesMtime = folMtime;
+        lastRulesReloadTime = Date.now();
+      }
+    } catch (e) {}
+
+    if (promptShownTime && promptShownTime < lastRulesReloadTime && previousRules) {
+      return {
+        ...rules,
+        _inFlightPrompt: true,
+        _oldRules: previousRules
+      };
+    }
+    return rules;
+  }
 
   let notice = null;
   if (!hasProfile) {
@@ -87,9 +178,16 @@ function startAgentwatch(options = {}) {
 
   // Auto-accept configuration (OFF by default, enabled via --auto or config.autoAcceptDefault)
   const config = loadConfig(options.configPath);
-  let autoAcceptEnabled = options.auto !== undefined
+  const initialAutoAccept = options.auto !== undefined
     ? Boolean(options.auto)
     : (options.autoAccept !== undefined ? Boolean(options.autoAccept) : Boolean(config.autoAcceptDefault));
+  let autoAcceptEnabled = initialAutoAccept;
+  let autoOnTimestamp = initialAutoAccept ? sessionStartTime : null;
+
+  // Session ID & Control directory
+  const sessionId = options.sessionId || `session-${Date.now()}-${process.pid}`;
+  const controlDir = options.controlDir || process.env.AGENTWATCH_CONTROL_DIR || path.join(os.homedir(), '.agentwatch', 'control');
+  const controlFilePath = path.join(controlDir, `${sessionId}.json`);
 
   // Check auto-open window
   const shouldAutoOpen = options.autoOpenWindow !== undefined
@@ -129,14 +227,18 @@ function startAgentwatch(options = {}) {
   );
 
   // Session ID & Status Manager
-  const sessionId = options.sessionId || `session-${Date.now()}-${process.pid}`;
   const statusManager = new SessionStatusManager({
     sessionId,
     agent: agentName,
     hasProfile,
     auto: autoAcceptEnabled,
+    token: options.token,
+    controlFilePath,
     allowPersist: hasAllowPersist,
     cwd: options.cwd || process.cwd(),
+    sessionKey: folderKey,
+    ancestors,
+    pendingQuestion: initialPendingQuestion,
     pid: process.pid,
     sessionsDir: options.sessionsDir
   });
@@ -162,7 +264,10 @@ function startAgentwatch(options = {}) {
   let rawStream = null;
   if (record) {
     const rawSessionPath = options.rawSessionPath || path.resolve(process.cwd(), 'raw-session.bin');
-    rawStream = fs.createWriteStream(rawSessionPath, { flags: 'a' });
+    try {
+      rawStream = fs.createWriteStream(rawSessionPath, { flags: 'a' });
+      rawStream.on('error', () => {});
+    } catch (e) {}
   }
 
   // State Classifier
@@ -191,6 +296,8 @@ function startAgentwatch(options = {}) {
   let quietTimer = null;
   let lastSnapshotText = null;
   let countdownTimer = null;
+  let currentCountdownPrompt = null;
+  let circuitBreakerTripped = false;
   let lastUserKeystrokeTime = 0;
   let lastChildDataReceivedTime = Date.now();
   const autoAnswersHistory = options.autoAnswersHistory || [];
@@ -222,6 +329,7 @@ function startAgentwatch(options = {}) {
   }
 
   function applyCircuitBreakerTrip(reason) {
+    circuitBreakerTripped = true;
     autoAcceptEnabled = false;
     statusManager.auto = false;
     const now = Date.now();
@@ -282,11 +390,19 @@ function startAgentwatch(options = {}) {
         option: matchedOpt,
         optionNumber: matchedOpt ? matchedOpt.number : parseInt(keyToSend, 10) || 1
       };
+      if (activePrompt.decision) {
+        const rName = (activePrompt.decision && activePrompt.decision.rule) || 'unknown';
+        const isFolderRule = (activePrompt.decision && activePrompt.decision.ruleList === 'folder');
+        const rPrefix = isFolderRule ? 'folder rule: ' : 'rule: ';
+        activePrompt.decision.log = `Auto-approved option ${keyToSend} (${rPrefix}${rName})`;
+      }
       onFinalAnswerSeen(activePrompt);
     }
 
     const timestamp = new Date(now).toISOString();
     const ruleName = (activePrompt && activePrompt.decision && activePrompt.decision.rule) || 'unknown';
+    const isFolderRule = (activePrompt && activePrompt.decision && activePrompt.decision.ruleList === 'folder');
+    const rPrefix = isFolderRule ? 'folder rule: ' : 'rule: ';
     const maskedSpaced = activePrompt && activePrompt.detected ? maskText(activePrompt.detected.commandSpaced || activePrompt.detected.command || '') : '';
     const maskedCompact = activePrompt && activePrompt.detected ? maskText(activePrompt.detected.commandCompact || '') : '';
 
@@ -298,7 +414,8 @@ function startAgentwatch(options = {}) {
       : ((activePrompt && activePrompt.decision && activePrompt.decision.optionText) || '');
     const maskedOptionText = maskText(rawOptionText);
 
-    const logLine = `[${timestamp}]\nAuto-accepted command: ${maskedSpaced}\nRule: ${ruleName}\nOption key: ${keyToSend}\nOption text: ${maskedOptionText}\nCountdown: ${countdownDuration}s\nAnswered by: auto\n\n`;
+    const autoApproveMsg = `Auto-approved option ${keyToSend} (${rPrefix}${ruleName})`;
+    const logLine = `[${timestamp}]\n${autoApproveMsg}\nAuto-accepted command: ${maskedSpaced}\nRule: ${ruleName}\nOption key: ${keyToSend}\nOption text: ${maskedOptionText}\nCountdown: ${countdownDuration}s\nAnswered by: auto\n\n`;
     try {
       fs.appendFileSync(promptsLogPath, logLine, 'utf8');
     } catch (e) {}
@@ -316,32 +433,37 @@ function startAgentwatch(options = {}) {
           compact: maskedCompact
         },
         rule: ruleName,
+        rule_list: isFolderRule ? 'folder' : 'default',
+        winning_rule: (activePrompt && activePrompt.decision && (activePrompt.decision.winningRule || activePrompt.decision.rule)) || ruleName,
+        skipped_rules: (activePrompt && activePrompt.decision && activePrompt.decision.skippedRules) || [],
         option_key: keyToSend,
         option_text: maskedOptionText,
         countdown_duration: countdownDuration,
-        answered_by: 'auto'
+        answered_by: 'auto',
+        agreement: 'n/a'
       }, historyPath);
     }
 
     statusManager.countdown = null;
   }
 
-  function cancelCountdown(reason = 'vetoed') {
+  function cancelCountdown(reason = 'vetoed', promptObj = null) {
     if (countdownTimer) {
       clearInterval(countdownTimer);
       countdownTimer = null;
     }
     statusManager.countdown = null;
-    if (activePrompt) {
-      activePrompt.inCountdown = false;
+    const targetPrompt = promptObj || activePrompt || currentCountdownPrompt;
+    if (targetPrompt) {
+      targetPrompt.inCountdown = false;
       const timestamp = new Date().toISOString();
-      const ruleName = (activePrompt.decision && activePrompt.decision.rule) || 'unknown';
-      const cmdSpaced = activePrompt.detected ? (activePrompt.detected.commandSpaced || activePrompt.detected.command || '') : '';
-      const cmdCompact = activePrompt.detected ? (activePrompt.detected.commandCompact || '') : '';
+      const ruleName = (targetPrompt.decision && targetPrompt.decision.rule) || 'unknown';
+      const cmdSpaced = targetPrompt.detected ? (targetPrompt.detected.commandSpaced || targetPrompt.detected.command || '') : '';
+      const cmdCompact = targetPrompt.detected ? (targetPrompt.detected.commandCompact || '') : '';
 
       if (reason === 'vetoed') {
-        activePrompt.vetoed = true;
-        activePrompt.answeredBy = 'vetoed';
+        targetPrompt.vetoed = true;
+        targetPrompt.answeredBy = 'vetoed';
         const logLine = `[${timestamp}] Auto-accept cancelled (vetoed by user)\n`;
         try {
           fs.appendFileSync(promptsLogPath, logLine, 'utf8');
@@ -372,25 +494,109 @@ function startAgentwatch(options = {}) {
           fs.appendFileSync(promptsLogPath, logLine, 'utf8');
         } catch (e) {}
       } else if (reason === 'danger') {
-        const matchedEntry = (activePrompt.decision && (activePrompt.decision.entry || activePrompt.decision.reason)) || 'danger';
+        const matchedEntry = (targetPrompt.decision && (targetPrompt.decision.entry || targetPrompt.decision.reason)) || 'danger';
         const logLine = `[${timestamp}] Auto-accept cancelled (DANGER: ${maskText(matchedEntry)})\n`;
+        try {
+          fs.appendFileSync(promptsLogPath, logLine, 'utf8');
+        } catch (e) {}
+      } else if (reason === 'turned_off') {
+        const logLine = `[${timestamp}] Auto-accept cancelled (turned off via GUI)\n`;
         try {
           fs.appendFileSync(promptsLogPath, logLine, 'utf8');
         } catch (e) {}
       }
 
       statusManager.update('asking', timestamp, {
-        ...activePrompt.detected,
-        decision: activePrompt.decision
+        ...targetPrompt.detected,
+        decision: targetPrompt.decision
       });
+    }
+    if (activePrompt && activePrompt !== targetPrompt) {
+      activePrompt.inCountdown = false;
+    }
+    currentCountdownPrompt = null;
+  }
+
+  function readControlFile() {
+    try {
+      if (!fs.existsSync(controlFilePath)) {
+        return null;
+      }
+      const raw = fs.readFileSync(controlFilePath, 'utf8').trim();
+      if (!raw) return null;
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch (e) {
+        return null; // Malformed JSON -> ignored
+      }
+      if (!data || typeof data !== 'object') return null;
+      if (data.sessionId !== sessionId) return null;
+      if (data.token !== statusManager.token) return null;
+      const ts = new Date(data.timestamp).getTime();
+      if (isNaN(ts) || ts < sessionStartTime) return null;
+      const desired = String(data.state || data.desiredState || '').trim().toLowerCase();
+      if (desired !== 'on' && desired !== 'off') return null;
+
+      if (desired === 'on') {
+        // "on" is honored only if Settings checkbox was enabled when written and real profiled session
+        if (data.allowTurnOnFromWindow !== true) return null;
+        if (!hasProfile) return null;
+      }
+
+      return {
+        state: desired,
+        timestamp: ts,
+        data
+      };
+    } catch (e) {
+      return null;
     }
   }
 
+  function syncControlState() {
+    if (circuitBreakerTripped) {
+      autoAcceptEnabled = false;
+      statusManager.auto = false;
+      return false;
+    }
+
+    const ctrl = readControlFile();
+    let newAutoState = initialAutoAccept;
+    if (ctrl) {
+      if (ctrl.state === 'off') {
+        newAutoState = false;
+      } else if (ctrl.state === 'on') {
+        newAutoState = true;
+        if (!autoOnTimestamp || ctrl.timestamp > autoOnTimestamp) {
+          autoOnTimestamp = ctrl.timestamp;
+        }
+      }
+    }
+
+    if (autoAcceptEnabled && !newAutoState) {
+      autoAcceptEnabled = false;
+      statusManager.auto = false;
+      cancelCountdown('turned_off');
+    } else if (!autoAcceptEnabled && newAutoState) {
+      autoAcceptEnabled = true;
+      statusManager.auto = true;
+      statusManager.writeStatus();
+    }
+    return autoAcceptEnabled;
+  }
+
   function isPromptEligibleForAuto(detected, decision) {
+    syncControlState();
     if (!autoAcceptEnabled) return false;
     if (!hasProfile) return false;
     if (!detected || !detected.footerSeen) return false;
     if (!decision || decision.action !== 'would_approve') return false;
+
+    // A prompt already on screen when "on" was clicked is not auto-answered
+    if (activePrompt && autoOnTimestamp && activePrompt.shownTime <= autoOnTimestamp) {
+      return false;
+    }
 
     // Must not look like a choice question (no clear yes/no meaning)
     if (isChoiceQuestion(detected)) return false;
@@ -445,6 +651,17 @@ function startAgentwatch(options = {}) {
 
   function triggerAutoAnswer(promptObj) {
     if (!promptObj || activePrompt !== promptObj) return;
+
+    syncControlState();
+    if (!autoAcceptEnabled) {
+      cancelCountdown('turned_off');
+      return;
+    }
+
+    if (promptObj && autoOnTimestamp && promptObj.shownTime <= autoOnTimestamp) {
+      cancelCountdown('turned_off');
+      return;
+    }
 
     if (Date.now() - lastUserKeystrokeTime < 1000) {
       cancelCountdown('vetoed');
@@ -515,7 +732,8 @@ function startAgentwatch(options = {}) {
     }
 
     // Check danger list right before sending - danger WINS over everything and cancels countdown
-    const currentDecision = evaluatePrompt(currentDetected, rules);
+    const currentRules = getEffectiveRules(promptObj ? promptObj.shownTime : Date.now());
+    const currentDecision = evaluatePrompt(currentDetected, currentRules);
     if (currentDecision && (currentDecision.danger || (currentDecision.reason && currentDecision.reason.startsWith('DANGER:')))) {
       promptObj.decision = currentDecision;
       cancelCountdown('danger');
@@ -530,11 +748,24 @@ function startAgentwatch(options = {}) {
     }
 
     promptObj.inCountdown = false;
+    syncControlState();
+    if (!autoAcceptEnabled) {
+      cancelCountdown('turned_off');
+      return;
+    }
+    if (promptObj && autoOnTimestamp && promptObj.shownTime <= autoOnTimestamp) {
+      cancelCountdown('turned_off');
+      return;
+    }
     const optionKey = promptObj.decision.optionKey || currentDecision.optionKey || '1';
     sendAutoAnswer(optionKey);
   }
 
   function startPromptCountdown(promptObj) {
+    syncControlState();
+    if (!autoAcceptEnabled) return;
+    if (promptObj && autoOnTimestamp && promptObj.shownTime <= autoOnTimestamp) return;
+
     if (countdownTimer) {
       clearInterval(countdownTimer);
       countdownTimer = null;
@@ -547,6 +778,7 @@ function startAgentwatch(options = {}) {
     const initialSecs = Math.max(1, Math.ceil(delay));
 
     promptObj.inCountdown = true;
+    currentCountdownPrompt = promptObj;
     promptObj.countdownSeconds = initialSecs;
     promptObj.countdownStart = Date.now();
     statusManager.countdown = initialSecs;
@@ -571,6 +803,12 @@ function startAgentwatch(options = {}) {
       if (!activePrompt || activePrompt !== promptObj || !promptObj.inCountdown) {
         if (countdownTimer) clearInterval(countdownTimer);
         countdownTimer = null;
+        return;
+      }
+
+      syncControlState();
+      if (!autoAcceptEnabled) {
+        cancelCountdown('turned_off');
         return;
       }
 
@@ -689,11 +927,14 @@ function startAgentwatch(options = {}) {
         }
       }
 
+      if (targetPrompt.autoAnswered) {
+        agreement = 'n/a';
+      }
       targetPrompt.closedEvent.answer_key = answerKey;
       targetPrompt.closedEvent.answer_option_text = answerOptionText;
       targetPrompt.closedEvent.answer_class = answerClass;
       targetPrompt.closedEvent.agreement = agreement;
-      const answeredBy = targetPrompt.autoAnswered ? 'auto' : (targetPrompt.vetoed ? 'user' : (signal ? 'user' : 'unknown'));
+      const answeredBy = targetPrompt.autoAnswered ? 'auto' : (targetPrompt.vetoed ? 'vetoed' : (signal ? 'user' : 'unknown'));
       targetPrompt.closedEvent.answered_by = answeredBy;
 
       // Update in historyPath
@@ -887,8 +1128,15 @@ function startAgentwatch(options = {}) {
     let answeredBy = 'unknown';
     if (activePrompt.autoAnswered) {
       answeredBy = 'auto';
+      agreement = 'n/a';
+      if (activePrompt.decision) {
+        const rName = (activePrompt.decision && activePrompt.decision.rule) || 'unknown';
+        const isFolderRule = (activePrompt.decision && activePrompt.decision.ruleList === 'folder');
+        const rPrefix = isFolderRule ? 'folder rule: ' : 'rule: ';
+        activePrompt.decision.log = `Auto-approved option ${answerKey} (${rPrefix}${rName})`;
+      }
     } else if (activePrompt.vetoed) {
-      answeredBy = signal ? 'user' : 'vetoed';
+      answeredBy = 'vetoed';
     } else if (signal) {
       answeredBy = 'user';
     }
@@ -919,12 +1167,15 @@ function startAgentwatch(options = {}) {
       })),
       decision: activePrompt.decision,
       rule: (activePrompt.decision && activePrompt.decision.rule) || null,
+      rule_list: (activePrompt.decision && activePrompt.decision.ruleList) || 'default',
+      winning_rule: (activePrompt.decision && (activePrompt.decision.winningRule || activePrompt.decision.rule)) || null,
+      skipped_rules: (activePrompt.decision && activePrompt.decision.skippedRules) || [],
       outcome: 'closed',
       durationSeconds,
       answer_key: answerKey,
       answer_option_text: answerOptionText,
       answer_class: answerClass,
-      agreement,
+      agreement: activePrompt.autoAnswered ? 'n/a' : agreement,
       answered_by: answeredBy
     };
     appendHistoryEvent(closedEvent, historyPath);
@@ -939,6 +1190,7 @@ function startAgentwatch(options = {}) {
   }
 
   function inspectScreenForPrompts(nowMs) {
+    syncControlState();
     const screenLines = getScreenLines();
 
     if (!hasProfile) {
@@ -967,7 +1219,8 @@ function startAgentwatch(options = {}) {
       const fingerprint = getPromptFingerprint(detected);
       if (!activePrompt) {
         recentlyClosedPrompt = null;
-        const decision = evaluatePrompt(detected, rules);
+        const promptRules = getEffectiveRules(Date.now());
+        const decision = evaluatePrompt(detected, promptRules);
         activePrompt = {
           detected,
           fingerprint,
@@ -998,7 +1251,8 @@ function startAgentwatch(options = {}) {
         }
         closeActivePrompt('new_prompt');
         recentlyClosedPrompt = null;
-        const decision = evaluatePrompt(detected, rules);
+        const promptRules = getEffectiveRules(Date.now());
+        const decision = evaluatePrompt(detected, promptRules);
         activePrompt = {
           detected,
           fingerprint,
@@ -1025,7 +1279,8 @@ function startAgentwatch(options = {}) {
         activePrompt.lastSelectedOptionNumber = getSelectedOptionNumberFromScreen(screenLines);
         // If countdown is active, verify danger hasn't hit
         if (activePrompt.inCountdown) {
-          const currentDecision = evaluatePrompt(detected, rules);
+          const checkRules = getEffectiveRules(activePrompt.shownTime);
+          const currentDecision = evaluatePrompt(detected, checkRules);
           if (currentDecision && (currentDecision.danger || (currentDecision.reason && currentDecision.reason.startsWith('DANGER:')))) {
             activePrompt.decision = currentDecision;
             cancelCountdown('danger');
@@ -1225,6 +1480,11 @@ function startAgentwatch(options = {}) {
 
       // Delete status file on clean exit
       statusManager.cleanup();
+      try {
+        if (fs.existsSync(controlFilePath)) {
+          fs.unlinkSync(controlFilePath);
+        }
+      } catch (e) {}
 
       // Log session_ended event on clean exit
       const sessionDurationSeconds = Math.max(0, Math.round((Date.now() - sessionStartTime) / 1000));
@@ -1281,11 +1541,21 @@ function startAgentwatch(options = {}) {
     getAutoAnswersHistory: () => autoAnswersHistory,
     isAutoAcceptEnabled: () => autoAcceptEnabled,
     setAutoAcceptEnabled: (val) => { autoAcceptEnabled = Boolean(val); statusManager.auto = autoAcceptEnabled; },
+    readControlFile,
+    syncControlState,
+    getControlFilePath: () => controlFilePath,
+    getAutoOnTimestamp: () => autoOnTimestamp,
+    setAutoOnTimestamp: (ts) => { autoOnTimestamp = ts; },
     cleanup: () => {
       if (countdownTimer) clearInterval(countdownTimer);
       if (quietTimer) clearTimeout(quietTimer);
       if (promptDebounceTimer) clearTimeout(promptDebounceTimer);
       clearInterval(checkInterval);
+      try {
+        if (fs.existsSync(controlFilePath)) {
+          fs.unlinkSync(controlFilePath);
+        }
+      } catch (e) {}
       statusManager.cleanup();
       recentlyClosedPrompt = null;
     }
@@ -1328,6 +1598,12 @@ function logPromptRecord(detected, decision, options = {}) {
   // Record matched rule name and option text for would_approve decisions
   if (decision && decision.action === 'would_approve' && decision.rule) {
     entry += `Rule: ${decision.rule}\n`;
+    if (decision.winningRule) {
+      entry += `Winning rule: ${decision.winningRule}\n`;
+    }
+    if (decision.skippedRules && decision.skippedRules.length > 0) {
+      entry += `Skipped rules: ${decision.skippedRules.join(', ')}\n`;
+    }
     if (decision.optionText) {
       entry += `Option text: ${maskText(decision.optionText)}\n`;
     }

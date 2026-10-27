@@ -340,15 +340,15 @@ async function runStage4bTests() {
       console.log('  ✓ Zero matches mark needs_user');
     }
 
-    // Test 2.2: Multiple matches (2 different options match different rules) -> needs_user
+    // Test 2.2: Multiple matches inside winning rule after higher-priority rule skipped -> needs_user
     {
       const customRules = {
         deny: DEFAULT_RULES.deny,
         danger: DEFAULT_RULES.danger,
         allow: [],
         optionRules: [
-          { name: 'rule-opt1', startsWith: 'Yes, option 1' },
-          { name: 'rule-opt2', startsWith: 'Yes, option 2' }
+          { name: 'rule-skipped', startsWith: 'Non-matching prefix' },
+          { name: 'rule-multi', startsWith: 'Yes, option' }
         ]
       };
       const prompt = {
@@ -363,8 +363,10 @@ async function runStage4bTests() {
       const d = evaluatePrompt(prompt, customRules);
       assert.strictEqual(d.action, 'needs_user');
       assert(d.reason.includes('multiple'), 'Reason must indicate multiple matches');
+      assert.strictEqual(d.winningRule, 'rule-multi');
+      assert.deepStrictEqual(d.skippedRules, ['rule-skipped']);
       suitePassCounts['Suite 2: Zero Matches and Multiple Matches Press Nothing']++;
-      console.log('  ✓ Multiple matches (different options match different rules) mark needs_user');
+      console.log('  ✓ Multiple matches inside winning rule after skipped rule mark needs_user');
     }
 
     // Test 2.3: Multiple matches (2 different options match the SAME rule) -> needs_user
@@ -392,29 +394,32 @@ async function runStage4bTests() {
       console.log('  ✓ Multiple options matching the same rule mark needs_user');
     }
 
-    // Test 2.4: 1 option matches 2 different rules -> needs_user
+    // Test 2.4: Multiple options matching winning rule even when option matches lower rule -> needs_user
     {
       const customRules = {
         deny: DEFAULT_RULES.deny,
         danger: DEFAULT_RULES.danger,
         allow: [],
         optionRules: [
-          { name: 'rule-a', startsWith: 'Yes, always allow' },
-          { name: 'rule-b', startsWith: 'Yes, always' }
+          { name: 'rule-a', startsWith: 'Yes, allow' },
+          { name: 'rule-b', startsWith: 'Yes, allow specific' }
         ]
       };
       const prompt = {
         commandSpaced: 'git status',
         question: 'Run this command?',
         options: [
-          { key: '1', number: 1, text: 'Yes, always allow this command', classification: 'yes_session' },
-          { key: '2', number: 2, text: 'No, cancel', classification: 'no' }
+          { key: '1', number: 1, text: 'Yes, allow specific', classification: 'yes_session' },
+          { key: '2', number: 2, text: 'Yes, allow general', classification: 'yes_once' },
+          { key: '3', number: 3, text: 'No, cancel', classification: 'no' }
         ]
       };
       const d = evaluatePrompt(prompt, customRules);
       assert.strictEqual(d.action, 'needs_user');
+      assert(d.reason.includes('multiple'), 'Reason must indicate multiple matches');
+      assert.strictEqual(d.winningRule, 'rule-a');
       suitePassCounts['Suite 2: Zero Matches and Multiple Matches Press Nothing']++;
-      console.log('  ✓ One option matching two distinct rules marks needs_user');
+      console.log('  ✓ Multiple options matching winning rule press nothing');
     }
   }
 

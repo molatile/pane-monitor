@@ -3,11 +3,21 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { maskText } = require('./masker');
+const { computeFolderAncestors } = require('./rules');
 
 const SESSIONS_DIR = process.env.AGENTWATCH_SESSIONS_DIR || path.join(os.homedir(), '.agentwatch', 'sessions');
+const CONTROL_DIR = process.env.AGENTWATCH_CONTROL_DIR || path.join(os.homedir(), '.agentwatch', 'control');
 const HEARTBEAT_INTERVAL_MS = 2000;
 const DEAD_SESSION_TIMEOUT_MS = 6000;
 const REMOVE_SESSION_TIMEOUT_MS = 60000;
+
+function getControlDir() {
+  return process.env.AGENTWATCH_CONTROL_DIR || path.join(os.homedir(), '.agentwatch', 'control');
+}
+
+function getControlFilePath(sessionId, controlDir = getControlDir()) {
+  return path.join(controlDir, `${sessionId}.json`);
+}
 
 /**
  * Formats a dry-run decision into a human-readable string.
@@ -17,6 +27,12 @@ function formatDecision(decision) {
   if (typeof decision === 'string') return decision;
   if (typeof decision === 'object') {
     if (decision.reason && decision.reason.startsWith('DANGER:')) {
+      return decision.reason;
+    }
+    if (decision.slowDanger) {
+      return `SLOW: matched '${decision.slowDanger}'`;
+    }
+    if (decision.reason && decision.reason.startsWith('SLOW:')) {
       return decision.reason;
     }
     if (decision.action === 'would_approve') {
@@ -53,8 +69,16 @@ class SessionStatusManager {
     this.folderHash = crypto.createHash('sha256').update(canonicalCwd).digest('hex').slice(0, 16);
     this.sessionKey = options.sessionKey || `${this.agent}:${this.folderHash}`;
 
+    // Session token for secure control communication
+    this.token = options.token || crypto.randomBytes(16).toString('hex');
+
+    // Compute ancestor hashes and display names at session start (never raw paths)
+    this.ancestors = options.ancestors || computeFolderAncestors(rawCwd, this.agent);
+    this.pendingQuestion = options.pendingQuestion || null;
+
     this.sessionsDir = options.sessionsDir || SESSIONS_DIR;
     this.filePath = path.join(this.sessionsDir, `${this.sessionId}.json`);
+    this.controlFilePath = options.controlFilePath || getControlFilePath(this.sessionId, options.controlDir);
 
     this.state = options.initialState || 'idle';
     this.stateSince = new Date().toISOString();
@@ -139,6 +163,9 @@ class SessionStatusManager {
       if (options.rule !== undefined) {
         this.rule = options.rule;
       }
+      if (options.pendingQuestion !== undefined) {
+        this.pendingQuestion = options.pendingQuestion;
+      }
     } else if (typeof options === 'number') {
       this.backgroundTasks = options;
       if (this.state !== 'countdown') {
@@ -159,8 +186,11 @@ class SessionStatusManager {
     const data = {
       sessionId: this.sessionId,
       sessionKey: this.sessionKey,
+      token: this.token,
       folderHash: this.folderHash,
       agent: this.agent,
+      ancestors: this.ancestors || [],
+      pendingQuestion: this.pendingQuestion || null,
       hasProfile: this.hasProfile,
       auto: Boolean(this.auto),
       allowPersist: Boolean(this.allowPersist),
@@ -215,6 +245,13 @@ class SessionStatusManager {
     try {
       if (fs.existsSync(this.filePath)) {
         fs.unlinkSync(this.filePath);
+      }
+    } catch (err) {
+      // Non-fatal cleanup error
+    }
+    try {
+      if (this.controlFilePath && fs.existsSync(this.controlFilePath)) {
+        fs.unlinkSync(this.controlFilePath);
       }
     } catch (err) {
       // Non-fatal cleanup error
@@ -322,6 +359,9 @@ function getActiveSessions(sessionsDir = SESSIONS_DIR) {
 
 module.exports = {
   SESSIONS_DIR,
+  CONTROL_DIR,
+  getControlDir,
+  getControlFilePath,
   DEAD_SESSION_TIMEOUT_MS,
   REMOVE_SESSION_TIMEOUT_MS,
   SessionStatusManager,

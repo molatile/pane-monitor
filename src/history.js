@@ -423,6 +423,15 @@ function formatPlainDecision(decision) {
     if (decision.reason && decision.reason.startsWith('DANGER:')) {
       return decision.reason;
     }
+    if (decision.slowDanger) {
+      return `SLOW: matched '${decision.slowDanger}'`;
+    }
+    if (decision.reason && decision.reason.startsWith('SLOW:')) {
+      return decision.reason;
+    }
+    if (decision.log && decision.log.startsWith('Auto-approved')) {
+      return decision.log;
+    }
     if (decision.action === 'would_approve') {
       const opt = decision.optionKey || '1';
       const delay = decision.delay !== undefined ? decision.delay : 3;

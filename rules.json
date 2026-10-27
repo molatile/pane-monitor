@@ -19,48 +19,258 @@
     "credentials"
   ],
   "danger": [
-    { "text": "delete", "wholeWord": false },
-    { "text": "remove", "wholeWord": false },
-    { "text": "erase", "wholeWord": false },
-    { "text": "rmdir", "wholeWord": false },
-    { "text": "del", "wholeWord": true },
-    { "text": "rm", "wholeWord": true },
-    { "text": "unlink", "wholeWord": false },
-    { "text": "drop table", "wholeWord": false },
-    { "text": "drop database", "wholeWord": false },
-    { "text": "truncate", "wholeWord": false },
-    { "text": "format", "wholeWord": true },
-    { "text": "mkfs", "wholeWord": false },
-    { "text": "kill", "wholeWord": false },
-    { "text": "taskkill", "wholeWord": false },
-    { "text": "shutdown", "wholeWord": false },
-    { "text": "reboot", "wholeWord": false },
-    { "text": "--force", "wholeWord": false },
-    { "text": "-rf", "wholeWord": false },
-    { "text": "sudo", "wholeWord": false },
-    { "text": "chmod", "wholeWord": false },
-    { "text": "chown", "wholeWord": false },
-    { "text": "reset --hard", "wholeWord": false },
-    { "text": "clean -fd", "wholeWord": false },
-    { "text": "push", "wholeWord": false },
-    { "text": "publish", "wholeWord": false },
-    { "text": "deploy", "wholeWord": false },
-    { "text": "uninstall", "wholeWord": false },
-    { "text": "curl", "wholeWord": false },
-    { "text": "wget", "wholeWord": false },
-    { "text": "Invoke-WebRequest", "wholeWord": false },
-    { "text": "Invoke-Expression", "wholeWord": false },
-    { "text": "iex", "wholeWord": true },
-    { "text": "ssh", "wholeWord": false },
-    { "text": "scp", "wholeWord": false },
-    { "text": "reg add", "wholeWord": false },
-    { "text": "reg delete", "wholeWord": false },
-    { "text": ".env", "wholeWord": false },
-    { "text": "secret", "wholeWord": false },
-    { "text": "password", "wholeWord": false },
-    { "text": "token", "wholeWord": false },
-    { "text": "credentials", "wholeWord": false },
-    { "text": "private key", "wholeWord": false }
+    {
+      "text": "delete",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "remove",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "erase",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "rmdir",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "del",
+      "wholeWord": true,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "rm",
+      "wholeWord": true,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "unlink",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "drop table",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "drop database",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "truncate",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "format",
+      "wholeWord": true,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "mkfs",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "kill",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "taskkill",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "shutdown",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "reboot",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "--force",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "-rf",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "sudo",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "chmod",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "chown",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "reset --hard",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "clean -fd",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "push",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "publish",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "deploy",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "uninstall",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "curl",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "wget",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "Invoke-WebRequest",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "Invoke-Expression",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "iex",
+      "wholeWord": true,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "ssh",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "scp",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "reg add",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "reg delete",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": ".env",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "secret",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "password",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "token",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "credentials",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "private key",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    }
   ],
   "allow": [
     {
@@ -83,7 +293,6 @@
       "pattern": "^echo(?:\\s+[^;&|><`$()\\r\\n]+)?$",
       "delay": 3
     },
-    // Tier 2 (disabled): npm run build, npm run lint, npm run dev, npm test
     {
       "name": "npm-build",
       "_comment": "Tier 2: disabled",
@@ -116,7 +325,9 @@
   "optionRules": [
     {
       "name": "always-in-conversation",
-      "startsWith": "Yes, and always allow in this conversation"
+      "startsWith": "4. No, cancel",
+      "enabled": true,
+      "allowPersist": false
     }
   ]
 }

@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { getSessionStatusList, SESSIONS_DIR, formatDecision } = require('./status');
+const { hasFolderRules } = require('./rules');
 
 const CONFIG_DIR = path.join(os.homedir(), '.agentwatch');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
@@ -30,6 +31,7 @@ function loadConfig(configPath = CONFIG_PATH) {
         autoOpenWindow: true,
         autoPaused: false,
         autoAcceptDefault: false,
+        allowTurnOnFromWindow: false,
         timeFormat: '24-hour',
         window: { width: 420, height: 360 },
         notified: {}
@@ -45,6 +47,7 @@ function loadConfig(configPath = CONFIG_PATH) {
         autoOpenWindow: true,
         autoPaused: false,
         autoAcceptDefault: false,
+        allowTurnOnFromWindow: false,
         timeFormat: '24-hour',
         window: { width: 420, height: 360 },
         notified: {}
@@ -59,6 +62,7 @@ function loadConfig(configPath = CONFIG_PATH) {
       autoOpenWindow: parsed.autoOpenWindow !== undefined ? Boolean(parsed.autoOpenWindow) : true,
       autoPaused: Boolean(parsed.autoPaused),
       autoAcceptDefault: Boolean(parsed.autoAcceptDefault),
+      allowTurnOnFromWindow: Boolean(parsed.allowTurnOnFromWindow),
       timeFormat: (parsed.timeFormat === '12-hour' || parsed.timeFormat === '12h') ? '12-hour' : '24-hour',
       guiPid: typeof parsed.guiPid === 'number' ? parsed.guiPid : undefined,
       guiStartTime: typeof parsed.guiStartTime === 'number' ? parsed.guiStartTime : undefined,
@@ -81,6 +85,7 @@ function loadConfig(configPath = CONFIG_PATH) {
       autoOpenWindow: true,
       autoPaused: false,
       autoAcceptDefault: false,
+      allowTurnOnFromWindow: false,
       timeFormat: '24-hour',
       window: { width: 420, height: 360 },
       notified: {}
@@ -118,6 +123,9 @@ function saveConfig(config, configPath = CONFIG_PATH) {
     }
     if (config.autoAcceptDefault !== undefined) {
       sanitized.autoAcceptDefault = Boolean(config.autoAcceptDefault);
+    }
+    if (config.allowTurnOnFromWindow !== undefined) {
+      sanitized.allowTurnOnFromWindow = Boolean(config.allowTurnOnFromWindow);
     }
     if (config.timeFormat !== undefined) {
       sanitized.timeFormat = (config.timeFormat === '12-hour' || config.timeFormat === '12h') ? '12-hour' : '24-hour';
@@ -164,20 +172,41 @@ function saveConfig(config, configPath = CONFIG_PATH) {
     );
 
     fs.writeFileSync(tempPath, content, 'utf8');
-    try {
-      fs.renameSync(tempPath, configPath);
-    } catch (renameErr) {
-      if (process.platform === 'win32' && (renameErr.code === 'EPERM' || renameErr.code === 'EEXIST')) {
-        try {
-          fs.unlinkSync(configPath);
-        } catch (_) {}
+    let renamed = false;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
         fs.renameSync(tempPath, configPath);
-      } else {
-        throw renameErr;
+        renamed = true;
+        break;
+      } catch (renameErr) {
+        lastErr = renameErr;
+        if (process.platform === 'win32' && (renameErr.code === 'EPERM' || renameErr.code === 'EEXIST' || renameErr.code === 'EBUSY' || renameErr.code === 'EACCES')) {
+          try {
+            fs.unlinkSync(configPath);
+          } catch (_) {}
+          try {
+            fs.renameSync(tempPath, configPath);
+            renamed = true;
+            break;
+          } catch (retryErr) {
+            lastErr = retryErr;
+          }
+        }
+        const waitUntil = Date.now() + 25;
+        while (Date.now() < waitUntil) {}
       }
     }
+    if (!renamed) {
+      try {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      } catch (_) {}
+      return false;
+    }
+    return true;
   } catch (e) {
     // Non-fatal write error
+    return false;
   }
 }
 
@@ -335,6 +364,12 @@ function setAutoPaused(config, isPaused, configPath = CONFIG_PATH) {
 
 function setAutoAcceptDefault(config, enabled, configPath = CONFIG_PATH) {
   config.autoAcceptDefault = Boolean(enabled);
+  saveConfig(config, configPath);
+  return config;
+}
+
+function setAllowTurnOnFromWindow(config, enabled, configPath = CONFIG_PATH) {
+  config.allowTurnOnFromWindow = Boolean(enabled);
   saveConfig(config, configPath);
   return config;
 }
@@ -573,9 +608,11 @@ function getDashboardData(options = {}) {
     const key = getSessionKey(session);
     const isAsking = session.state === 'asking' && !session.isDead;
     const bgCount = session.backgroundTasks || session.backgroundTaskCount || 0;
+    const hasOwn = hasFolderRules(key);
     return {
       sessionId: session.sessionId,
       sessionKey: key,
+      token: session.token || null,
       agent: session.agent,
       hasProfile: session.hasProfile !== false,
       folder: session.folder,
@@ -589,6 +626,9 @@ function getDashboardData(options = {}) {
       isAsking,
       prompt: session.prompt || null,
       auto: Boolean(session.auto),
+      allowPersist: Boolean(session.allowPersist),
+      hasOwnRules: hasOwn,
+      ruleSet: hasOwn ? 'own rules' : 'default rules',
       countdown: (session.countdown !== undefined && session.countdown !== null) ? session.countdown : null
     };
   });
@@ -619,6 +659,7 @@ module.exports = {
   setAutoOpenWindow,
   setAutoPaused,
   setAutoAcceptDefault,
+  setAllowTurnOnFromWindow,
   setTimeFormat,
   isGuiRunning,
   stopGui,

@@ -306,6 +306,28 @@ console.log('\n--- Test Group 5: File Access Safety & Zero Network Calls ---');
     assert(!content.includes('net.connect'), `Safety violation: GUI file src/gui/${file} makes net.connect call`);
   }
 
+  // 4. Allowed window writes verification:
+  // Renderer process must NEVER perform any direct file writes or choose any path
+  const rendererCode = fs.readFileSync(path.join(guiDir, 'renderer.js'), 'utf8');
+  assert(!rendererCode.includes('fs.'), 'Renderer must never access fs');
+  assert(!rendererCode.includes('require('), 'Renderer must not require any Node modules');
+
+  // Allowed writes from the window are ONLY:
+  // - config.json (via set-setting, set-always-on-top, reorder-sessions, rename-session)
+  // - history-clear action (via clear-agent-history)
+  // - rules file + backups + change log (via save-rules, restore-rules, reset-danger-rules)
+  const mainCode = fs.readFileSync(path.join(guiDir, 'main.js'), 'utf8');
+  const allowedWriteOperations = [
+    'saveConfig',
+    'clearAgentHistory',
+    'saveRules',
+    'restoreRulesBackup',
+    'resetDangerList'
+  ];
+  for (const op of allowedWriteOperations) {
+    assert(mainCode.includes(op), `main.js must define allowed write operation: ${op}`);
+  }
+
   // Verify CLI parsing for gui command
   const cli1 = parseArgs(['gui']);
   assert.strictEqual(cli1.command, 'gui');

@@ -1,5 +1,78 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+
+const CANONICAL_RULES_PATH = path.resolve(__dirname, '..', 'rules.json');
+
+function getAgentwatchDir() {
+  return process.env.AGENTWATCH_DIR || path.join(os.homedir(), '.agentwatch');
+}
+
+function getRulesBackupsDir() {
+  return path.join(getAgentwatchDir(), 'rules-backups');
+}
+
+function getRulesChangesLogPath() {
+  return path.join(getAgentwatchDir(), 'rules-changes.log');
+}
+
+function getFolderRulesDir() {
+  return process.env.AGENTWATCH_FOLDER_RULES_DIR || path.join(getAgentwatchDir(), 'folder-rules');
+}
+
+function getFolderChoicesPath() {
+  return process.env.AGENTWATCH_FOLDER_CHOICES_PATH || path.join(getAgentwatchDir(), 'folder-choices.json');
+}
+
+function safeFolderKeyBase(folderKey) {
+  return String(folderKey || '').replace(/[:\\/*?"<>|]/g, '_');
+}
+
+function safeFolderKeyFilename(folderKey) {
+  return safeFolderKeyBase(folderKey) + '.json';
+}
+
+function getFolderRulesBackupsDir(folderKey) {
+  return path.join(getRulesBackupsDir(), 'folders', safeFolderKeyBase(folderKey));
+}
+
+function getFolderRulesPath(folderKey, customDir) {
+  const dir = customDir || getFolderRulesDir();
+  const direct = path.join(dir, `${folderKey}.json`);
+  const safe = path.join(dir, safeFolderKeyFilename(folderKey));
+  if (process.platform !== 'win32' && fs.existsSync(direct)) {
+    return direct;
+  }
+  if (fs.existsSync(safe)) {
+    return safe;
+  }
+  return process.platform === 'win32' ? safe : direct;
+}
+
+/**
+ * Computes ancestors of a folder path as hashes and display names.
+ * NEVER returns or stores raw folder paths.
+ * Returns array of { hash, name, key }, nearest ancestor first (ancestors[0]).
+ */
+function computeFolderAncestors(cwd, agent = 'agy') {
+  const ancestors = [];
+  let current = path.resolve(cwd || process.cwd());
+  while (true) {
+    const parent = path.dirname(current);
+    if (!parent || parent === current) {
+      break;
+    }
+    const normParent = path.resolve(parent);
+    const canonical = process.platform === 'win32' ? normParent.toLowerCase() : normParent;
+    const hash = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 16);
+    const name = path.basename(normParent) || normParent;
+    const key = `${agent}:${hash}`;
+    ancestors.push({ hash, name, key });
+    current = parent;
+  }
+  return ancestors;
+}
 
 const DEFAULT_DANGER_LIST = [
   { text: 'delete', wholeWord: false },
@@ -172,6 +245,11 @@ function validateOptionRules(rawList) {
       continue;
     }
 
+    if (/^(?:no\b|cancel\b|abort\b|reject\b)/i.test(trimmedStarts)) {
+      console.warn(`agentwatch: warning: option rule startsWith cannot match "No" options, rejected: "${item.startsWith}"`);
+      continue;
+    }
+
     if (item.endsWith !== undefined) {
       if (typeof item.endsWith !== 'string') {
         console.warn(`agentwatch: warning: option rule endsWith must be a string, ignored: ${JSON.stringify(item)}`);
@@ -282,7 +360,12 @@ function validateDangerList(rawList) {
     if (rawList !== undefined && rawList !== null) {
       console.warn('agentwatch: warning: danger list must be an array, ignoring invalid danger property');
     }
-    return DEFAULT_DANGER_LIST.slice();
+    return DEFAULT_DANGER_LIST.map(e => ({
+      text: e.text,
+      wholeWord: Boolean(e.wholeWord),
+      level: 'hard',
+      enabled: true
+    }));
   }
 
   const validEntries = [];
@@ -295,14 +378,27 @@ function validateDangerList(rawList) {
       console.warn(`agentwatch: warning: danger entry missing text string ignored: ${JSON.stringify(item)}`);
       continue;
     }
-    if (item.text.length < 2) {
+    const trimmedText = item.text.trim();
+    if (trimmedText.length < 2) {
       console.warn(`agentwatch: warning: danger entry shorter than 2 characters ignored: "${item.text}"`);
       continue;
     }
-    validEntries.push({
-      text: item.text,
+    const entry = {
+      text: trimmedText,
       wholeWord: Boolean(item.wholeWord)
-    });
+    };
+    if (item.level === 'slow') {
+      entry.level = 'slow';
+      entry.delay = typeof item.delay === 'number' && item.delay > 0 ? item.delay : 10;
+    } else {
+      entry.level = 'hard';
+    }
+    if (item.enabled !== undefined) {
+      entry.enabled = Boolean(item.enabled);
+    } else {
+      entry.enabled = true;
+    }
+    validEntries.push(entry);
   }
 
   return validEntries;
@@ -366,13 +462,22 @@ function checkDangerMatch(prompt, dangerList) {
   const cmdCompact = (prompt.commandCompact || cmdSpaced.replace(/\s+/g, '')).replace(/\s+/g, '');
   const question = prompt.question || '';
 
+  const matched = [];
   for (const entry of list) {
+    if (entry && entry.enabled === false) continue;
     if (checkDangerEntry(entry, cmdSpaced, cmdCompact, question)) {
-      return entry;
+      matched.push(entry);
     }
   }
 
-  return null;
+  if (matched.length === 0) return null;
+
+  // Hard stop always wins over slow down
+  const hardMatch = matched.find(e => e.level !== 'slow');
+  if (hardMatch) {
+    return hardMatch;
+  }
+  return matched[0];
 }
 
 /**
@@ -523,6 +628,20 @@ function isChoiceQuestion(prompt) {
  * 7. Prompts that look like choice questions are marked needs_user.
  */
 function evaluatePrompt(prompt, customRules) {
+  if (customRules && customRules._inFlightPrompt && customRules._oldRules) {
+    const newDecision = evaluatePrompt(prompt, { ...customRules, _inFlightPrompt: false, _oldRules: null });
+    const oldDecision = evaluatePrompt(prompt, customRules._oldRules);
+    // Tightening applies immediately (more restrictive action wins)
+    if (newDecision.action !== 'would_approve') {
+      return newDecision;
+    }
+    // Loosening applies only to prompts after save (in-flight prompt cannot auto-approve via loosened rule)
+    if (oldDecision.action !== 'would_approve') {
+      return oldDecision;
+    }
+    return newDecision;
+  }
+
   const rules = customRules || loadRules();
 
   if (!prompt || !prompt.options || prompt.options.length < 2) {
@@ -535,6 +654,9 @@ function evaluatePrompt(prompt, customRules) {
 
   const cmdSpaced = prompt.commandSpaced || prompt.command || '';
   const cmdCompact = prompt.commandCompact || cmdSpaced.replace(/\s+/g, '');
+  const isFolder = Boolean(rules.isFolderRuleSet);
+  const ruleListType = isFolder ? 'folder' : 'default';
+  const rulePrefix = isFolder ? 'folder rule: ' : 'rule: ';
 
   // 1. Deny list ALWAYS wins (checked on both spaced and compact forms)
   const denyList = rules.deny || DEFAULT_RULES.deny;
@@ -543,6 +665,7 @@ function evaluatePrompt(prompt, customRules) {
       return {
         action: 'blocked',
         rule: denyRule,
+        ruleList: ruleListType,
         log: `Dry-run: blocked command by deny rule "${denyRule}"`
       };
     }
@@ -551,12 +674,13 @@ function evaluatePrompt(prompt, customRules) {
   // 2. Danger list WINS over allow list, option rules, and countdown
   const dangerList = rules.danger !== undefined ? rules.danger : DEFAULT_RULES.danger;
   const dangerMatch = checkDangerMatch(prompt, dangerList);
-  if (dangerMatch) {
+  if (dangerMatch && dangerMatch.level !== 'slow') {
     const matchedText = dangerMatch.text;
     return {
       action: 'needs_user',
       danger: true,
       entry: matchedText,
+      ruleList: ruleListType,
       reason: `DANGER: matched '${matchedText}'`,
       log: `Dry-run: needs_user (DANGER: matched '${matchedText}')`
     };
@@ -566,77 +690,117 @@ function evaluatePrompt(prompt, customRules) {
   if (isChoiceQuestion(prompt)) {
     return {
       action: 'needs_user',
+      ruleList: ruleListType,
       reason: 'choice question (no clear yes/no meaning)',
       log: 'Dry-run: needs_user (choice question (no clear yes/no meaning))'
     };
   }
 
-  // 4. Option rules matching:
-  // EXACTLY ONE option on screen must match an enabled rule.
-  // If zero or more than one match, press nothing and mark needs_user.
+  // 4. Option rules matching (ordered list; earlier rules have higher priority)
+  // Test enabled rules in order; the FIRST rule that matches at least one option wins.
+  // If the winning rule matches exactly one option, that option is the candidate (subject to guards).
+  // If it matches more than one option, press nothing and mark needs_user.
+  // If it matches none, continue to the next rule.
   const optionRules = Array.isArray(rules.optionRules) ? rules.optionRules : [];
   const enabledOptionRules = optionRules.filter(r => r && r.enabled !== false);
 
   if (enabledOptionRules.length > 0) {
-    const matchedOptionRulePairs = [];
-    for (const opt of prompt.options) {
-      for (const rule of enabledOptionRules) {
+    const skippedRules = [];
+    let winningRule = null;
+    let candidateMatches = null;
+
+    for (const rule of enabledOptionRules) {
+      const matches = [];
+      for (const opt of prompt.options) {
         if (matchesOptionRule(rule, opt, cmdSpaced)) {
-          matchedOptionRulePairs.push({ option: opt, rule });
+          matches.push(opt);
         }
       }
+
+      if (matches.length === 0) {
+        // No option matched this rule; record as skipped higher-priority rule
+        skippedRules.push(rule.name);
+        continue;
+      }
+
+      // First rule that matches at least one option wins!
+      winningRule = rule;
+      candidateMatches = matches;
+      break;
     }
 
-    if (matchedOptionRulePairs.length > 0) {
-      // Collect unique options that matched
-      const uniqueMatchedOptions = [];
-      for (const pair of matchedOptionRulePairs) {
-        if (!uniqueMatchedOptions.some(o => (o.key && o.key === pair.option.key) || o.number === pair.option.number)) {
-          uniqueMatchedOptions.push(pair.option);
-        }
-      }
-
-      if (uniqueMatchedOptions.length > 1 || matchedOptionRulePairs.length > 1) {
-        const reason = uniqueMatchedOptions.length > 1
-          ? 'multiple options matched enabled option rules'
-          : 'multiple option rules matched single option';
+    if (winningRule) {
+      if (candidateMatches.length > 1) {
+        // Winning rule matches more than one option: press nothing and mark needs_user
+        const reason = `multiple options matched winning rule "${winningRule.name}"`;
+        const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
         return {
           action: 'needs_user',
+          rule: winningRule.name,
+          winningRule: winningRule.name,
+          ruleList: ruleListType,
+          skippedRules: skippedRules.slice(),
           reason,
-          log: `Dry-run: needs_user (${reason})`
+          log: `Dry-run: needs_user (${reason}${skippedInfo})`
         };
       }
 
-      // Exactly ONE option matched exactly ONE enabled rule!
-      const { option: matchedOption, rule: matchedRule } = matchedOptionRulePairs[0];
+      // Exactly ONE option matched the winning rule
+      const matchedOption = candidateMatches[0];
 
       // Persist protection: if matched option is classified yes_persist,
-      // require the rule to have allowPersist true.
-      if (isPersistOption(matchedOption) && !matchedRule.allowPersist) {
-        const reason = `persist option blocked (rule "${matchedRule.name}" has allowPersist: false)`;
+      // require the winning rule to have allowPersist true.
+      if (isPersistOption(matchedOption) && !winningRule.allowPersist) {
+        const reason = `persist option blocked (rule "${winningRule.name}" has allowPersist: false)`;
+        const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
         return {
           action: 'needs_user',
-          rule: matchedRule.name,
+          rule: winningRule.name,
+          winningRule: winningRule.name,
+          ruleList: ruleListType,
+          skippedRules: skippedRules.slice(),
           reason,
-          log: `Dry-run: needs_user (${reason})`
+          log: `Dry-run: needs_user (${reason}${skippedInfo})`
         };
       }
 
-      const delay = matchedRule.delay !== undefined
-        ? matchedRule.delay
+      let delay = winningRule.delay !== undefined
+        ? winningRule.delay
         : (rules.defaultDelaySeconds || 3);
+      if (dangerMatch && dangerMatch.level === 'slow') {
+        const slowDelay = typeof dangerMatch.delay === 'number' && dangerMatch.delay > 0 ? dangerMatch.delay : 10;
+        delay = Math.max(delay, slowDelay);
+      }
       const optionKey = matchedOption.key || String(matchedOption.number);
+      const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
       return {
         action: 'would_approve',
         delay,
-        rule: matchedRule.name,
+        rule: winningRule.name,
+        winningRule: winningRule.name,
+        ruleList: ruleListType,
+        skippedRules: skippedRules.slice(),
         ruleType: 'optionRule',
         optionKey,
         optionText: matchedOption.text,
         matchedOption,
-        log: `Dry-run: would approve option ${optionKey} after ${delay}s (rule: ${matchedRule.name})`
+        slowDanger: dangerMatch ? dangerMatch.text : undefined,
+        log: `Dry-run: would approve option ${optionKey} after ${delay}s (${rulePrefix}${winningRule.name}${skippedInfo})`
       };
     }
+  }
+
+  // Priority rule: if folder has its own list, test its rules in order then nothing else
+  if (isFolder) {
+    const allOptionRulesSkipped = enabledOptionRules.map(r => r.name);
+    return {
+      action: 'needs_user',
+      ruleList: 'folder',
+      winningRule: null,
+      skippedRules: allOptionRulesSkipped,
+      reason: 'no rule matched in folder list',
+      log: 'Dry-run: needs_user (no rule matched in folder list)'
+    };
   }
 
   // 5. Existing command allow list keeps working alongside option rules
@@ -666,17 +830,26 @@ function evaluatePrompt(prompt, customRules) {
       if (allowRule.pattern) {
         const reg = new RegExp(allowRule.pattern, 'i');
         if (reg.test(cmdToMatch)) {
-          const delay = allowRule.delay !== undefined
+          let delay = allowRule.delay !== undefined
             ? allowRule.delay
             : (rules.defaultDelaySeconds || 3);
+          if (dangerMatch && dangerMatch.level === 'slow') {
+            const slowDelay = typeof dangerMatch.delay === 'number' && dangerMatch.delay > 0 ? dangerMatch.delay : 10;
+            delay = Math.max(delay, slowDelay);
+          }
           const optionKey = eligibleOption.key || String(eligibleOption.number);
+          const allOptionRulesSkipped = enabledOptionRules.map(r => r.name);
           return {
             action: 'would_approve',
             delay,
             rule: allowRule.name,
+            winningRule: allowRule.name,
+            ruleList: ruleListType,
+            skippedRules: allOptionRulesSkipped,
             ruleType: 'allowRule',
             optionKey,
             optionText: eligibleOption.text,
+            slowDanger: dangerMatch ? dangerMatch.text : undefined,
             log: `Dry-run: would approve option ${optionKey} after ${delay}s (rule: ${allowRule.name})`
           };
         }
@@ -685,12 +858,837 @@ function evaluatePrompt(prompt, customRules) {
   }
 
   // 7. No allow rule matched or forbidden shell syntax
+  const allOptionRulesSkipped = enabledOptionRules.map(r => r.name);
   return {
     action: 'needs_user',
+    winningRule: null,
+    ruleList: ruleListType,
+    skippedRules: allOptionRulesSkipped,
     reason: hasForbiddenSyntax ? 'forbidden shell syntax' : 'no allow rule matched',
     log: hasForbiddenSyntax
       ? 'Dry-run: needs_user (forbidden shell syntax)'
       : 'Dry-run: needs_user (no allow rule matched)'
+  };
+}
+
+/**
+ * Validates the complete rules structure.
+ * Returns { valid: boolean, errors: string[], sanitizedRules: object }.
+ */
+function validateAllRules(rules, options = {}) {
+  const errors = [];
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) {
+    return { valid: false, errors: ['Rules must be a JSON object'], sanitizedRules: null };
+  }
+
+  const sanitized = {
+    defaultDelaySeconds: typeof rules.defaultDelaySeconds === 'number' && rules.defaultDelaySeconds > 0
+      ? rules.defaultDelaySeconds
+      : 3,
+    deny: [],
+    danger: [],
+    allow: [],
+    optionRules: []
+  };
+
+  // Deny list
+  if (rules.deny !== undefined) {
+    if (!Array.isArray(rules.deny)) {
+      errors.push('deny must be an array of pattern strings');
+    } else {
+      // Must include all built-in deny rules
+      for (const builtin of DEFAULT_RULES.deny) {
+        if (!rules.deny.includes(builtin)) {
+          errors.push(`Built-in deny rule "${builtin}" cannot be removed`);
+        }
+      }
+      for (const item of rules.deny) {
+        if (typeof item !== 'string' || item.trim().length < 2) {
+          errors.push(`Invalid deny rule: "${item}" (must be at least 2 characters)`);
+        } else {
+          sanitized.deny.push(item.trim());
+        }
+      }
+    }
+  } else {
+    sanitized.deny = DEFAULT_RULES.deny.slice();
+  }
+
+  // Danger list
+  if (rules.danger !== undefined) {
+    if (!Array.isArray(rules.danger)) {
+      errors.push('danger must be an array of danger entries');
+    } else {
+      const ALLOWED_DANGER_KEYS = new Set(['text', 'wholeWord', 'level', 'delay', 'enabled']);
+      for (let i = 0; i < rules.danger.length; i++) {
+        const item = rules.danger[i];
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          errors.push(`Danger entry #${i + 1} must be an object`);
+          continue;
+        }
+        const unknownKeys = Object.keys(item).filter(k => !ALLOWED_DANGER_KEYS.has(k));
+        if (unknownKeys.length > 0) {
+          errors.push(`Danger entry #${i + 1} contains unknown properties: ${unknownKeys.join(', ')}`);
+        }
+        if (typeof item.text !== 'string' || item.text.trim().length < 2) {
+          errors.push(`Danger entry #${i + 1} text must be at least 2 characters`);
+        }
+        if (item.level !== undefined && item.level !== 'hard' && item.level !== 'slow') {
+          errors.push(`Danger entry #${i + 1} level must be either "hard" or "slow"`);
+        }
+        if (item.level === 'slow' && item.delay !== undefined && (typeof item.delay !== 'number' || item.delay <= 0)) {
+          errors.push(`Danger entry #${i + 1} delay must be a positive number`);
+        }
+      }
+      sanitized.danger = validateDangerList(rules.danger);
+    }
+  } else {
+    sanitized.danger = DEFAULT_DANGER_LIST.map(e => ({ text: e.text, wholeWord: Boolean(e.wholeWord), level: 'hard', enabled: true }));
+  }
+
+  // Allow list
+  if (rules.allow !== undefined) {
+    if (!Array.isArray(rules.allow)) {
+      errors.push('allow must be an array of allow rules');
+    } else {
+      sanitized.allow = rules.allow.slice();
+    }
+  } else {
+    sanitized.allow = DEFAULT_RULES.allow.slice();
+  }
+
+  // Option rules
+  if (rules.optionRules !== undefined) {
+    if (!Array.isArray(rules.optionRules)) {
+      errors.push('optionRules must be an array');
+    } else {
+      const ALLOWED_OPTION_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist']);
+      for (let i = 0; i < rules.optionRules.length; i++) {
+        const item = rules.optionRules[i];
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          errors.push(`Option rule #${i + 1} must be an object`);
+          continue;
+        }
+        const unknownKeys = Object.keys(item).filter(k => !ALLOWED_OPTION_KEYS.has(k));
+        if (unknownKeys.length > 0) {
+          errors.push(`Option rule #${i + 1} contains unknown fields (${unknownKeys.join(', ')})`);
+        }
+        if (typeof item.name !== 'string' || item.name.trim() === '') {
+          errors.push(`Option rule #${i + 1} name cannot be empty`);
+        }
+        if (typeof item.startsWith !== 'string' || item.startsWith.trim().length < 3) {
+          errors.push(`Option rule "${item.name || i + 1}" startsWith must be at least 3 characters`);
+        } else if (/^(?:no\b|cancel\b|abort\b|reject\b)/i.test(item.startsWith.trim())) {
+          errors.push(`Option rule "${item.name || i + 1}" cannot match 'No' options`);
+        }
+        if (item.endsWith !== undefined && (typeof item.endsWith !== 'string' || item.endsWith.trim() === '')) {
+          errors.push(`Option rule "${item.name || i + 1}" endsWith cannot be empty`);
+        }
+        if (item.commandStartsWith !== undefined && (typeof item.commandStartsWith !== 'string' || item.commandStartsWith.trim() === '')) {
+          errors.push(`Option rule "${item.name || i + 1}" commandStartsWith cannot be empty`);
+        }
+      }
+      sanitized.optionRules = validateOptionRules(rules.optionRules);
+    }
+  } else {
+    sanitized.optionRules = (DEFAULT_RULES.optionRules || []).slice();
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    sanitizedRules: sanitized
+  };
+}
+
+/**
+ * Detects whether newRules loosens safety compared to oldRules:
+ * 1. A new or edited option rule with no commandStartsWith
+ * 2. A rule that matches a persist option or sets allowPersist true (requires typing "PERSIST")
+ * 3. Removing or disabling a hard danger entry
+ * 4. Enabling a tier-2 allow rule
+ * 5. Shortening a slow-danger delay
+ */
+function detectLoosening(oldRules, newRules) {
+  const oldOptionRules = Array.isArray(oldRules?.optionRules) ? oldRules.optionRules : [];
+  const newOptionRules = Array.isArray(newRules?.optionRules) ? newRules.optionRules : [];
+  const oldDanger = Array.isArray(oldRules?.danger) ? oldRules.danger : DEFAULT_DANGER_LIST;
+  const newDanger = Array.isArray(newRules?.danger) ? newRules.danger : [];
+  const oldAllow = Array.isArray(oldRules?.allow) ? oldRules.allow : DEFAULT_RULES.allow;
+  const newAllow = Array.isArray(newRules?.allow) ? newRules.allow : [];
+
+  const items = [];
+  let requiresPersistConfirmation = false;
+
+  // 1. New or edited option rule with no commandStartsWith
+  const oldRuleMap = new Map();
+  for (const r of oldOptionRules) {
+    if (r && r.name) oldRuleMap.set(r.name, r);
+  }
+
+  for (const newRule of newOptionRules) {
+    if (!newRule || newRule.enabled === false) continue;
+    const oldRule = oldRuleMap.get(newRule.name);
+    const isNew = !oldRule;
+    const isEdited = oldRule && (
+      oldRule.startsWith !== newRule.startsWith ||
+      oldRule.endsWith !== newRule.endsWith ||
+      oldRule.commandStartsWith !== newRule.commandStartsWith ||
+      Boolean(oldRule.allowPersist) !== Boolean(newRule.allowPersist)
+    );
+
+    if ((isNew || isEdited) && (!newRule.commandStartsWith || newRule.commandStartsWith.trim() === '')) {
+      items.push(`Option rule "${newRule.name}" has no command prefix restriction (applies to all commands)`);
+    }
+
+    // 2. A rule that matches a persist option or sets allowPersist true
+    const setsPersist = newRule.allowPersist === true && (!oldRule || !oldRule.allowPersist);
+    const matchesPersist = isPersistOption({ text: newRule.startsWith });
+    if (setsPersist || matchesPersist) {
+      items.push(`Option rule "${newRule.name}" allows persisting permissions or matches persist options`);
+      requiresPersistConfirmation = true;
+    }
+  }
+
+  // 3. Removing or disabling a hard danger entry
+  for (const oldEntry of oldDanger) {
+    if (!oldEntry || oldEntry.enabled === false || oldEntry.level === 'slow') continue;
+    const matchingNew = newDanger.find(e => e && e.text.toLowerCase() === oldEntry.text.toLowerCase());
+    if (!matchingNew) {
+      items.push(`Removed hard danger entry "${oldEntry.text}"`);
+    } else if (matchingNew.enabled === false) {
+      items.push(`Disabled hard danger entry "${oldEntry.text}"`);
+    } else if (matchingNew.level === 'slow') {
+      items.push(`Downgraded danger entry "${oldEntry.text}" from hard stop to slow down`);
+    }
+  }
+
+  // 4. Enabling a tier-2 allow rule
+  const oldAllowMap = new Map();
+  for (const a of oldAllow) {
+    if (a && a.name) oldAllowMap.set(a.name, a);
+  }
+
+  for (const newA of newAllow) {
+    if (!newA || newA.enabled !== true) continue;
+    const oldA = oldAllowMap.get(newA.name);
+    if (!oldA || oldA.enabled === false) {
+      items.push(`Enabled tier-2 allow rule "${newA.name}"`);
+    }
+  }
+
+  // 5. Shortening a slow-danger delay
+  for (const oldEntry of oldDanger) {
+    if (!oldEntry || oldEntry.level !== 'slow' || oldEntry.enabled === false) continue;
+    const matchingNew = newDanger.find(e => e && e.text.toLowerCase() === oldEntry.text.toLowerCase());
+    if (matchingNew && matchingNew.level === 'slow' && matchingNew.enabled !== false) {
+      const oldDelay = typeof oldEntry.delay === 'number' ? oldEntry.delay : 10;
+      const newDelay = typeof matchingNew.delay === 'number' ? matchingNew.delay : 10;
+      if (newDelay < oldDelay) {
+        items.push(`Shortened delay for slow danger entry "${oldEntry.text}" from ${oldDelay}s to ${newDelay}s`);
+      }
+    }
+  }
+
+  return {
+    isLooser: items.length > 0,
+    items,
+    requiresPersistConfirmation
+  };
+}
+
+/**
+ * Saves rules atomically: writes to temp file then renames.
+ * Retains up to 10 newest timestamped backups.
+ * Appends change summary to rules-changes.log.
+ */
+function saveRules(newRules, customPath, { changeSummary } = {}) {
+  const targetPath = customPath || CANONICAL_RULES_PATH;
+  const validation = validateAllRules(newRules, { strict: true });
+  if (!validation.valid) {
+    const err = new Error(`Cannot save rules: ${validation.errors.join('; ')}`);
+    err.validationErrors = validation.errors;
+    throw err;
+  }
+
+  const backupsDir = getRulesBackupsDir();
+  try {
+    if (!fs.existsSync(backupsDir)) {
+      fs.mkdirSync(backupsDir, { recursive: true });
+    }
+  } catch (e) {}
+
+  // 1. Keep timestamped backup if target file exists
+  if (fs.existsSync(targetPath)) {
+    try {
+      const currentContent = fs.readFileSync(targetPath, 'utf8');
+      const backupFilename = `rules-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      const backupFilePath = path.join(backupsDir, backupFilename);
+      fs.writeFileSync(backupFilePath, currentContent, 'utf8');
+
+      // Keep only newest 10 backups
+      const allBackups = fs.readdirSync(backupsDir)
+        .filter(f => f.startsWith('rules-') && f.endsWith('.json'))
+        .sort((a, b) => b.localeCompare(a));
+
+      if (allBackups.length > 10) {
+        for (let i = 10; i < allBackups.length; i++) {
+          try {
+            fs.unlinkSync(path.join(backupsDir, allBackups[i]));
+          } catch (e) {}
+        }
+      }
+    } catch (e) {
+      console.warn(`agentwatch: warning: could not create rules backup: ${e.message}`);
+    }
+  }
+
+  // 2. Atomic write
+  const targetDir = path.dirname(targetPath);
+  try {
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+  } catch (e) {}
+
+  const tempFilePath = path.join(targetDir, `.rules.${Date.now()}.${process.pid}.tmp`);
+  fs.writeFileSync(tempFilePath, JSON.stringify(validation.sanitizedRules, null, 2), 'utf8');
+  fs.renameSync(tempFilePath, targetPath);
+
+  // 3. Append to ~/.agentwatch/rules-changes.log with no secrets
+  try {
+    const logPath = getRulesChangesLogPath();
+    const logDir = path.dirname(logPath);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    const logEntry = JSON.stringify({
+      time: new Date().toISOString(),
+      what: changeSummary || 'rules saved via gui',
+      who: 'gui'
+    }) + '\n';
+    fs.appendFileSync(logPath, logEntry, 'utf8');
+  } catch (e) {}
+
+  return { success: true, path: targetPath };
+}
+
+/**
+ * Returns available timestamped rules backups sorted newest first.
+ */
+function getRulesBackups(customBackupDir) {
+  const dir = customBackupDir || getRulesBackupsDir();
+  if (!fs.existsSync(dir)) return [];
+  try {
+    const files = fs.readdirSync(dir)
+      .filter(f => f.startsWith('rules-') && f.endsWith('.json'))
+      .sort((a, b) => b.localeCompare(a));
+    return files.map(name => {
+      try {
+        const stat = fs.statSync(path.join(dir, name));
+        return {
+          name,
+          time: stat.mtime.toISOString(),
+          size: stat.size
+        };
+      } catch (e) {
+        return { name, time: new Date().toISOString(), size: 0 };
+      }
+    });
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Restores a previous backup atomically.
+ */
+function restoreRulesBackup(backupName, customPath, customBackupDir) {
+  if (!backupName || typeof backupName !== 'string') {
+    throw new Error('Invalid backup name');
+  }
+  const safeName = path.basename(backupName);
+  if (safeName !== backupName || !safeName.endsWith('.json')) {
+    throw new Error('Invalid backup filename');
+  }
+  const dir = customBackupDir || getRulesBackupsDir();
+  const backupFile = path.join(dir, safeName);
+  if (!fs.existsSync(backupFile)) {
+    throw new Error(`Backup file not found: ${safeName}`);
+  }
+  const raw = fs.readFileSync(backupFile, 'utf8');
+  const parsed = JSON.parse(raw);
+  return saveRules(parsed, customPath, { changeSummary: `Restored backup: ${safeName}` });
+}
+
+/**
+ * Resets the danger list to factory defaults.
+ */
+function resetDangerList(customPath) {
+  const current = loadRules(customPath);
+  current.danger = DEFAULT_DANGER_LIST.map(e => ({
+    text: e.text,
+    wholeWord: Boolean(e.wholeWord),
+    level: 'hard',
+    enabled: true
+  }));
+  return saveRules(current, customPath, { changeSummary: 'Reset danger list to defaults' });
+}
+
+/**
+ * Validates folder rules structure.
+ * Global danger and deny rules can never be weakened or removed.
+ */
+function validateFolderRules(rules, globalRules) {
+  const baseRules = globalRules || loadRules();
+  const errors = [];
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) {
+    return { valid: false, errors: ['Folder rules must be a JSON object'], sanitizedRules: null };
+  }
+
+  const ALLOWED_TOP_KEYS = new Set(['optionRules', 'danger', 'deny']);
+  for (const k of Object.keys(rules)) {
+    if (!ALLOWED_TOP_KEYS.has(k)) {
+      errors.push(`Folder rules contains unknown property "${k}"`);
+    }
+  }
+
+  const sanitized = {
+    optionRules: []
+  };
+
+  // Option rules
+  if (rules.optionRules !== undefined) {
+    if (!Array.isArray(rules.optionRules)) {
+      errors.push('optionRules must be an array');
+    } else {
+      const ALLOWED_OPTION_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist']);
+      for (let i = 0; i < rules.optionRules.length; i++) {
+        const item = rules.optionRules[i];
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          errors.push(`Option rule #${i + 1} must be an object`);
+          continue;
+        }
+        const unknownKeys = Object.keys(item).filter(k => !ALLOWED_OPTION_KEYS.has(k));
+        if (unknownKeys.length > 0) {
+          errors.push(`Option rule #${i + 1} contains unknown fields (${unknownKeys.join(', ')})`);
+        }
+        if (typeof item.name !== 'string' || item.name.trim() === '') {
+          errors.push(`Option rule #${i + 1} name cannot be empty`);
+        }
+        if (typeof item.startsWith !== 'string' || item.startsWith.trim().length < 3) {
+          errors.push(`Option rule "${item.name || i + 1}" startsWith must be at least 3 characters`);
+        } else if (/^(?:no\b|cancel\b|abort\b|reject\b)/i.test(item.startsWith.trim())) {
+          errors.push(`Option rule "${item.name || i + 1}" cannot match 'No' options`);
+        }
+        if (item.endsWith !== undefined && (typeof item.endsWith !== 'string' || item.endsWith.trim() === '')) {
+          errors.push(`Option rule "${item.name || i + 1}" endsWith cannot be empty`);
+        }
+        if (item.commandStartsWith !== undefined && (typeof item.commandStartsWith !== 'string' || item.commandStartsWith.trim() === '')) {
+          errors.push(`Option rule "${item.name || i + 1}" commandStartsWith cannot be empty`);
+        }
+      }
+      sanitized.optionRules = validateOptionRules(rules.optionRules);
+    }
+  } else {
+    sanitized.optionRules = [];
+  }
+
+  // Deny list
+  if (rules.deny !== undefined) {
+    if (!Array.isArray(rules.deny)) {
+      errors.push('deny must be an array');
+    } else {
+      const globalDeny = baseRules.deny || DEFAULT_RULES.deny;
+      for (const b of globalDeny) {
+        if (!rules.deny.includes(b)) {
+          errors.push(`Folder rules cannot remove global deny rule "${b}"`);
+        }
+      }
+      sanitized.deny = rules.deny.slice();
+    }
+  }
+
+  // Danger list
+  if (rules.danger !== undefined) {
+    if (!Array.isArray(rules.danger)) {
+      errors.push('danger must be an array');
+    } else {
+      const validatedDanger = validateDangerList(rules.danger);
+      const globalDanger = baseRules.danger || DEFAULT_DANGER_LIST;
+      for (const gd of globalDanger) {
+        if (!gd || gd.enabled === false) continue;
+        const matching = validatedDanger.find(e => e.text.toLowerCase() === gd.text.toLowerCase());
+        if (!matching) {
+          errors.push(`Folder rules cannot remove global danger entry "${gd.text}"`);
+        } else if (matching.enabled === false) {
+          errors.push(`Folder rules cannot disable global danger entry "${gd.text}"`);
+        } else if (gd.level !== 'slow' && matching.level === 'slow') {
+          errors.push(`Folder rules cannot weaken global danger entry "${gd.text}" from hard stop to slow down`);
+        } else if (gd.level === 'slow' && matching.level === 'slow') {
+          const gdDelay = typeof gd.delay === 'number' ? gd.delay : 10;
+          const fdDelay = typeof matching.delay === 'number' ? matching.delay : 10;
+          if (fdDelay < gdDelay) {
+            errors.push(`Folder rules cannot shorten delay for global danger entry "${gd.text}" below ${gdDelay}s`);
+          }
+        }
+      }
+      sanitized.danger = validatedDanger;
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    sanitizedRules: sanitized
+  };
+}
+
+/**
+ * Loads folder choices map from disk.
+ */
+function loadFolderChoices(customPath) {
+  const p = customPath || getFolderChoicesPath();
+  if (fs.existsSync(p)) {
+    try {
+      const raw = fs.readFileSync(p, 'utf8');
+      return JSON.parse(raw) || {};
+    } catch (e) {
+      return {};
+    }
+  }
+  return {};
+}
+
+/**
+ * Saves a choice for a folder key atomically.
+ */
+function saveFolderChoice(folderKey, data, customPath) {
+  const p = customPath || getFolderChoicesPath();
+  const choices = loadFolderChoices(p);
+  choices[folderKey] = {
+    ...(choices[folderKey] || {}),
+    ...data,
+    time: new Date().toISOString()
+  };
+  const dir = path.dirname(p);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const tmp = path.join(dir, `.choices.${Date.now()}.${process.pid}.tmp`);
+  fs.writeFileSync(tmp, JSON.stringify(choices, null, 2), 'utf8');
+  try {
+    fs.renameSync(tmp, p);
+  } catch (err) {
+    if (process.platform === 'win32' && (err.code === 'EPERM' || err.code === 'EEXIST')) {
+      try { fs.unlinkSync(p); } catch (_) {}
+      fs.renameSync(tmp, p);
+    } else {
+      throw err;
+    }
+  }
+  return choices[folderKey];
+}
+
+/**
+ * Increments dismissal count for folder question.
+ * Stops asking after 2 dismissals (leaves defaults).
+ */
+function dismissFolderQuestion(folderKey, customPath) {
+  const p = customPath || getFolderChoicesPath();
+  const choices = loadFolderChoices(p);
+  const current = choices[folderKey] || {};
+  const dismissCount = (current.dismissCount || 0) + 1;
+  const update = {
+    ...current,
+    dismissCount,
+    time: new Date().toISOString()
+  };
+  if (dismissCount >= 2) {
+    update.choice = 'declined';
+  }
+  return saveFolderChoice(folderKey, update, p);
+}
+
+/**
+ * Checks whether a folder has its own rule file.
+ */
+function hasFolderRules(folderKey, customDir) {
+  if (!folderKey) return false;
+  const p = getFolderRulesPath(folderKey, customDir);
+  return fs.existsSync(p);
+}
+
+/**
+ * Loads raw rules object from folder-rules/<folderKey>.json.
+ */
+function loadFolderRules(folderKey, customDir) {
+  const p = getFolderRulesPath(folderKey, customDir);
+  if (!fs.existsSync(p)) return null;
+  try {
+    const raw = fs.readFileSync(p, 'utf8');
+    const stripped = raw.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const parsed = JSON.parse(stripped);
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.optionRules !== undefined) {
+        parsed.optionRules = validateOptionRules(parsed.optionRules);
+      } else {
+        parsed.optionRules = [];
+      }
+      if (parsed.danger !== undefined) {
+        parsed.danger = validateDangerList(parsed.danger);
+      }
+      return parsed;
+    }
+  } catch (e) {
+    console.warn(`agentwatch: warning: could not load folder rules from "${p}": ${e.message}`);
+  }
+  return null;
+}
+
+/**
+ * Deletes folder rules file (resetting folder to default rules).
+ */
+function deleteFolderRules(folderKey, customDir) {
+  const p = getFolderRulesPath(folderKey, customDir);
+  if (fs.existsSync(p)) {
+    try {
+      fs.unlinkSync(p);
+    } catch (e) {
+      console.warn(`agentwatch: warning: could not delete folder rules "${p}": ${e.message}`);
+    }
+  }
+  try {
+    const logPath = getRulesChangesLogPath();
+    const logDir = path.dirname(logPath);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    const logEntry = JSON.stringify({
+      time: new Date().toISOString(),
+      what: `Reset folder rules to default rules for ${folderKey}`,
+      who: 'gui',
+      folderKey: folderKey
+    }) + '\n';
+    fs.appendFileSync(logPath, logEntry, 'utf8');
+  } catch (e) {}
+
+  return { success: true };
+}
+
+/**
+ * Returns timestamped backups for a folder rules file.
+ */
+function getFolderRulesBackups(folderKey, customBackupDir) {
+  const dir = customBackupDir || getFolderRulesBackupsDir(folderKey);
+  if (!fs.existsSync(dir)) return [];
+  try {
+    const files = fs.readdirSync(dir)
+      .filter(f => f.startsWith('rules-') && f.endsWith('.json'))
+      .sort((a, b) => b.localeCompare(a));
+    return files.map(name => {
+      try {
+        const stat = fs.statSync(path.join(dir, name));
+        return { name, time: stat.mtime.toISOString(), size: stat.size };
+      } catch (e) {
+        return { name, time: new Date().toISOString(), size: 0 };
+      }
+    });
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Restores a folder rules backup atomically.
+ */
+function restoreFolderRulesBackup(folderKey, backupName, customDir, customBackupDir) {
+  if (!backupName || typeof backupName !== 'string') {
+    throw new Error('Invalid backup name');
+  }
+  const safeName = path.basename(backupName);
+  if (safeName !== backupName || !safeName.endsWith('.json')) {
+    throw new Error('Invalid backup filename');
+  }
+  const dir = customBackupDir || getFolderRulesBackupsDir(folderKey);
+  const backupFile = path.join(dir, safeName);
+  if (!fs.existsSync(backupFile)) {
+    throw new Error(`Backup file not found: ${safeName}`);
+  }
+  const raw = fs.readFileSync(backupFile, 'utf8');
+  const parsed = JSON.parse(raw);
+  return saveFolderRules(folderKey, parsed, {
+    customDir,
+    changeSummary: `Restored backup: ${safeName}`
+  });
+}
+
+/**
+ * Saves folder rules atomically: writes to temp file then renames.
+ * Retains up to 10 newest timestamped backups.
+ * Appends change summary to rules-changes.log with folderKey (never raw path).
+ */
+function saveFolderRules(folderKey, newRules, options = {}) {
+  const customDir = options.customDir || getFolderRulesDir();
+  const targetPath = options.customPath || getFolderRulesPath(folderKey, customDir);
+  const globalRules = options.globalRules || loadRules(options.globalRulesPath);
+
+  const validation = validateFolderRules(newRules, globalRules);
+  if (!validation.valid) {
+    const err = new Error(`Cannot save folder rules: ${validation.errors.join('; ')}`);
+    err.validationErrors = validation.errors;
+    throw err;
+  }
+
+  const targetDir = path.dirname(targetPath);
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+
+  // Backup previous file if it existed
+  const backupsDir = options.customBackupDir || getFolderRulesBackupsDir(folderKey);
+  if (fs.existsSync(targetPath)) {
+    try {
+      if (!fs.existsSync(backupsDir)) {
+        fs.mkdirSync(backupsDir, { recursive: true });
+      }
+      const currentContent = fs.readFileSync(targetPath, 'utf8');
+      const backupFilename = `rules-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      fs.writeFileSync(path.join(backupsDir, backupFilename), currentContent, 'utf8');
+
+      const allBackups = fs.readdirSync(backupsDir)
+        .filter(f => f.startsWith('rules-') && f.endsWith('.json'))
+        .sort((a, b) => b.localeCompare(a));
+      if (allBackups.length > 10) {
+        for (let i = 10; i < allBackups.length; i++) {
+          try { fs.unlinkSync(path.join(backupsDir, allBackups[i])); } catch (e) {}
+        }
+      }
+    } catch (e) {
+      console.warn(`agentwatch: warning: could not create folder rules backup: ${e.message}`);
+    }
+  }
+
+  // Atomic write
+  const tempFilePath = path.join(targetDir, `.rules.${safeFolderKeyBase(folderKey)}.${Date.now()}.${process.pid}.tmp`);
+  fs.writeFileSync(tempFilePath, JSON.stringify(validation.sanitizedRules, null, 2), 'utf8');
+  try {
+    fs.renameSync(tempFilePath, targetPath);
+  } catch (err) {
+    if (process.platform === 'win32' && (err.code === 'EPERM' || err.code === 'EEXIST')) {
+      try { fs.unlinkSync(targetPath); } catch (_) {}
+      fs.renameSync(tempFilePath, targetPath);
+    } else {
+      throw err;
+    }
+  }
+
+  // Append to rules-changes.log with folderKey (NEVER raw path!)
+  try {
+    const logPath = getRulesChangesLogPath();
+    const logDir = path.dirname(logPath);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    const logEntry = JSON.stringify({
+      time: new Date().toISOString(),
+      what: options.changeSummary || `folder rules saved for ${folderKey}`,
+      who: options.who || 'gui',
+      folderKey: folderKey
+    }) + '\n';
+    fs.appendFileSync(logPath, logEntry, 'utf8');
+  } catch (e) {}
+
+  return { success: true, path: targetPath };
+}
+
+/**
+ * Copies option rules from ancestor folder into folder's own list.
+ * Snapshot copy (deep clone, not link).
+ * Rules with allowPersist: true are skipped and counted.
+ */
+function copyAncestorRules(folderKey, ancestorKey, options = {}) {
+  const ancestorRules = loadFolderRules(ancestorKey, options.customDir);
+  if (!ancestorRules) {
+    throw new Error(`Ancestor rules not found for key: ${ancestorKey}`);
+  }
+  const rawRules = ancestorRules.optionRules || [];
+  let skippedPersistCount = 0;
+  const copiedRules = [];
+
+  for (const r of rawRules) {
+    if (r.allowPersist === true) {
+      skippedPersistCount++;
+    } else {
+      // Deep snapshot clone
+      copiedRules.push({ ...r });
+    }
+  }
+
+  const newFolderRules = {
+    optionRules: copiedRules
+  };
+  if (ancestorRules.danger && Array.isArray(ancestorRules.danger)) {
+    newFolderRules.danger = ancestorRules.danger.map(d => ({ ...d }));
+  }
+
+  saveFolderRules(folderKey, newFolderRules, {
+    customDir: options.customDir,
+    changeSummary: `Copied ${copiedRules.length} rules from ancestor ${ancestorKey} (skipped ${skippedPersistCount} allowPersist rules)`
+  });
+
+  saveFolderChoice(folderKey, {
+    choice: 'copied',
+    ancestorKey,
+    copiedCount: copiedRules.length,
+    skippedPersistCount
+  }, options.customChoicesPath);
+
+  return {
+    success: true,
+    copiedCount: copiedRules.length,
+    skippedPersistCount,
+    rules: newFolderRules
+  };
+}
+
+/**
+ * Loads effective rules for a folder key:
+ * If folder has own list: uses folder's optionRules, merges danger/deny with global rules,
+ * marks isFolderRuleSet: true.
+ * If folder has NO own list: uses default rules directly (isFolderRuleSet: false).
+ */
+function loadRulesForFolder(folderKey, defaultRulesPath, folderRulesDir) {
+  const globalRules = loadRules(defaultRulesPath);
+  if (!folderKey) {
+    return globalRules;
+  }
+  if (!hasFolderRules(folderKey, folderRulesDir)) {
+    return globalRules;
+  }
+  const folderRules = loadFolderRules(folderKey, folderRulesDir);
+  if (!folderRules) {
+    return globalRules;
+  }
+
+  // Merge danger: global danger cannot be weakened
+  const mergedDanger = (globalRules.danger || DEFAULT_DANGER_LIST).map(d => ({ ...d }));
+  if (Array.isArray(folderRules.danger)) {
+    for (const fd of folderRules.danger) {
+      if (!fd || typeof fd.text !== 'string') continue;
+      const existing = mergedDanger.find(g => g.text.toLowerCase() === fd.text.toLowerCase());
+      if (!existing) {
+        mergedDanger.push({ ...fd });
+      }
+    }
+  }
+
+  return {
+    ...globalRules,
+    optionRules: (folderRules.optionRules || []).slice(),
+    danger: mergedDanger,
+    isFolderRuleSet: true,
+    folderKey
   };
 }
 
@@ -704,8 +1702,36 @@ module.exports = {
   checkDangerMatch,
   validateDangerList,
   validateOptionRules,
+  validateAllRules,
+  validateFolderRules,
   matchesOptionRule,
   isPersistOption,
+  detectLoosening,
+  saveRules,
+  getRulesBackups,
+  restoreRulesBackup,
+  resetDangerList,
+  getRulesBackupsDir,
+  getRulesChangesLogPath,
+  getFolderRulesDir,
+  getFolderChoicesPath,
+  safeFolderKeyBase,
+  safeFolderKeyFilename,
+  getFolderRulesPath,
+  getFolderRulesBackupsDir,
+  computeFolderAncestors,
+  loadFolderChoices,
+  saveFolderChoice,
+  dismissFolderQuestion,
+  hasFolderRules,
+  loadFolderRules,
+  deleteFolderRules,
+  getFolderRulesBackups,
+  restoreFolderRulesBackup,
+  saveFolderRules,
+  copyAncestorRules,
+  loadRulesForFolder,
+  CANONICAL_RULES_PATH,
   DEFAULT_DANGER_LIST,
   DEFAULT_RULES
 };
