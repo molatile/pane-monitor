@@ -58,6 +58,9 @@ const settingAllowTurnOn = getEl('setting-allow-turn-on');
 const settingPinTop = getEl('setting-pin-top');
 const settingNotifications = getEl('setting-notifications');
 const settingTimeFormat = getEl('setting-time-format');
+const settingLogDirVal = getEl('setting-log-dir-val');
+const settingLogDirBrowseBtn = getEl('setting-log-dir-browse-btn');
+const settingLogDirDefaultBtn = getEl('setting-log-dir-default-btn');
 
 // Turn on confirmation modal elements (Stage 6)
 const turnOnModal = getEl('turn-on-modal');
@@ -1585,6 +1588,11 @@ function updateSettingsTab() {
   if (settingTimeFormat && document.activeElement !== settingTimeFormat) {
     settingTimeFormat.value = currentConfig.timeFormat || '24-hour';
   }
+  if (settingLogDirVal) {
+    settingLogDirVal.textContent = (currentConfig && currentConfig.logDir && currentConfig.logDir.trim())
+      ? currentConfig.logDir.trim()
+      : 'Default: the folder the agent was started in';
+  }
 }
 
 // -------------------------------------------------------------
@@ -1852,6 +1860,50 @@ if (settingAllowTurnOn) {
         const entry = rowCache.get(session.sessionKey);
         if (entry) updateRow(entry, session);
       });
+    }
+  });
+}
+
+// Log folder settings listeners
+if (settingLogDirBrowseBtn) {
+  settingLogDirBrowseBtn.addEventListener('click', async () => {
+    if (window.agentwatch && window.agentwatch.pickLogFolder) {
+      try {
+        const res = await window.agentwatch.pickLogFolder();
+        if (res && res.canceled) {
+          return;
+        }
+        if (res && res.success) {
+          if (res.logDir) {
+            currentConfig.logDir = res.logDir;
+          }
+          updateSettingsTab();
+          showToast('Saved');
+        } else {
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save log folder');
+        }
+      } catch (err) {
+        showToast(`Error: ${err.message || 'Failed to select folder'}`);
+      }
+    }
+  });
+}
+
+if (settingLogDirDefaultBtn) {
+  settingLogDirDefaultBtn.addEventListener('click', async () => {
+    if (window.agentwatch && window.agentwatch.setSetting) {
+      try {
+        const res = await window.agentwatch.setSetting('logDir', '');
+        if (res && res.success) {
+          currentConfig.logDir = '';
+          updateSettingsTab();
+          showToast('Saved');
+        } else {
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to clear log folder');
+        }
+      } catch (err) {
+        showToast(`Error: ${err.message || 'Failed to clear log folder'}`);
+      }
     }
   });
 }

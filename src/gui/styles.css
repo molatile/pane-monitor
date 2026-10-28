@@ -1196,6 +1196,35 @@ details[open] .past-agents-summary::before {
   outline: none;
 }
 
+.setting-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.setting-path-val {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-primary);
+  background-color: var(--bg-color);
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  word-break: break-all;
+  display: inline-block;
+  margin: 4px 0;
+}
+
+.setting-btn-group {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
 .auto-pause-toggle {
   display: flex;
   align-items: center;

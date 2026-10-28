@@ -54,6 +54,14 @@ contextBridge.exposeInMainWorld('agentwatch', {
   },
 
   /**
+   * Opens native folder picker in main process and saves selected folder.
+   * Renderer never chooses or passes a path.
+   */
+  pickLogFolder: () => {
+    return ipcRenderer.invoke('pick-log-folder');
+  },
+
+  /**
    * Calls the ONE fixed read function for history.
    */
   readHistory: (options) => {

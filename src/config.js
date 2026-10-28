@@ -21,6 +21,7 @@ module.exports = {
   setAutoAcceptDefault: shared.setAutoAcceptDefault,
   setTimeFormat: shared.setTimeFormat,
   setLogDir: shared.setLogDir,
+  validateLogDir: shared.validateLogDir,
   isGuiRunning: shared.isGuiRunning,
   orderSessions: shared.orderSessions,
   reorderSession: shared.reorderSession,

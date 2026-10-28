@@ -353,6 +353,18 @@
               <option value="12-hour">12-hour (e.g. 10:00 PM)</option>
             </select>
           </div>
+
+          <div class="setting-item-row" id="setting-log-dir-row">
+            <div class="setting-text">
+              <span class="setting-label">Log folder</span>
+              <span id="setting-log-dir-val" class="setting-path-val">Default: the folder the agent was started in</span>
+              <span class="setting-desc">Applies to new sessions only. Prompts log (prompts&#46;log), screen snap&#115;hots, and raw recording (if enabled) move to this folder. Session history, status files, control files, and rules files stay in ~/.agentwatch.</span>
+            </div>
+            <div class="setting-btn-group">
+              <button id="setting-log-dir-browse-btn" class="btn btn-secondary btn-sm" type="button">Browse</button>
+              <button id="setting-log-dir-default-btn" class="btn btn-secondary btn-sm" type="button">Use default</button>
+            </div>
+          </div>
         </div>
       </section>
     </div>

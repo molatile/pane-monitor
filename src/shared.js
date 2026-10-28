@@ -142,7 +142,9 @@ function saveConfig(config, configPath = CONFIG_PATH) {
       sanitized.guiStartTime = config.guiStartTime;
     }
     if (typeof config.logDir === 'string') {
-      sanitized.logDir = config.logDir;
+      if (config.logDir.trim()) {
+        sanitized.logDir = config.logDir.trim();
+      }
     }
     if (typeof config.outputDir === 'string') {
       sanitized.outputDir = config.outputDir;
@@ -407,9 +409,115 @@ function setTimeFormat(config, format, configPath = CONFIG_PATH) {
  * Sets custom output directory for logs and snapshots and saves the configuration.
  */
 function setLogDir(config, logDir, configPath = CONFIG_PATH) {
-  config.logDir = typeof logDir === 'string' ? logDir : '';
+  config.logDir = typeof logDir === 'string' ? logDir.trim() : '';
   saveConfig(config, configPath);
   return config;
+}
+
+/**
+ * Validates a target log directory path.
+ * Enforces that:
+ * 1. Path is absolute
+ * 2. Not a system folder (Windows, Program Files, System32, and drive roots)
+ * 3. Exists or can be created
+ * 4. Is writable (tries creating and deleting a small test file)
+ */
+function validateLogDir(folderPath) {
+  if (typeof folderPath !== 'string' || !folderPath.trim()) {
+    return { valid: false, error: 'Path must be a non-empty string' };
+  }
+
+  const trimmed = folderPath.trim();
+
+  // 1. Must be absolute
+  if (!path.isAbsolute(trimmed)) {
+    return { valid: false, error: 'Log folder path must be an absolute path' };
+  }
+  if (process.platform === 'win32') {
+    if (!/^[a-zA-Z]:[\\/]/.test(trimmed) && !trimmed.startsWith('\\\\')) {
+      return { valid: false, error: 'Log folder path must include a drive letter or UNC prefix' };
+    }
+  }
+
+  const resolved = path.resolve(trimmed);
+  const normalized = resolved.toLowerCase();
+
+  // 2. Reject drive roots (e.g. C:\, C:, /, \)
+  const parsed = path.parse(resolved);
+  const rootNorm = parsed.root.toLowerCase().replace(/[\\/]+$/, '');
+  const pathNorm = normalized.replace(/[\\/]+$/, '');
+  if (pathNorm === rootNorm || pathNorm === '' || /^[a-zA-Z]:[\\/]?$/.test(trimmed)) {
+    return { valid: false, error: 'Drive roots cannot be used as a log folder' };
+  }
+
+  // 3. Reject system folders (Windows, Program Files, System32, and OS system directories)
+  const systemPaths = [];
+  if (process.platform === 'win32') {
+    const sysDrive = process.env.SystemDrive || 'C:';
+    const winDir = process.env.SystemRoot || process.env.windir || `${sysDrive}\\Windows`;
+    systemPaths.push(winDir);
+    systemPaths.push(path.join(winDir, 'System32'));
+    if (process.env.ProgramFiles) systemPaths.push(process.env.ProgramFiles);
+    if (process.env['ProgramFiles(x86)']) systemPaths.push(process.env['ProgramFiles(x86)']);
+    if (process.env.ProgramW6432) systemPaths.push(process.env.ProgramW6432);
+    systemPaths.push(`${sysDrive}\\Windows`);
+    systemPaths.push(`${sysDrive}\\Windows\\System32`);
+    systemPaths.push(`${sysDrive}\\Program Files`);
+    systemPaths.push(`${sysDrive}\\Program Files (x86)`);
+  } else {
+    systemPaths.push('/bin', '/sbin', '/usr', '/lib', '/etc', '/var', '/System', '/Library');
+  }
+
+  for (const sys of systemPaths) {
+    if (!sys) continue;
+    const normSys = path.resolve(sys).toLowerCase().replace(/[\\/]+$/, '');
+    if (pathNorm === normSys || pathNorm.startsWith(normSys + path.sep.toLowerCase()) || pathNorm.startsWith(normSys + '/')) {
+      return { valid: false, error: `System folder "${sys}" cannot be used as a log folder` };
+    }
+  }
+
+  // Check segments for system32, windows, program files regardless of drive
+  const segments = pathNorm.split(/[\\/]+/).filter(Boolean);
+  if (segments.includes('system32')) {
+    return { valid: false, error: 'System32 cannot be used as a log folder' };
+  }
+  if (segments.length >= 2 && segments[1] === 'windows') {
+    return { valid: false, error: 'Windows folder cannot be used as a log folder' };
+  }
+  if (segments.some(seg => seg === 'program files' || seg === 'program files (x86)')) {
+    return { valid: false, error: 'Program Files cannot be used as a log folder' };
+  }
+
+  // 4. Exists or can be created
+  let createdDir = false;
+  try {
+    if (fs.existsSync(resolved)) {
+      const st = fs.statSync(resolved);
+      if (!st.isDirectory()) {
+        return { valid: false, error: 'Specified path is a file, not a directory' };
+      }
+    } else {
+      fs.mkdirSync(resolved, { recursive: true });
+      createdDir = true;
+    }
+  } catch (err) {
+    return { valid: false, error: `Cannot create folder: ${err.message}` };
+  }
+
+  // 5. Is writable (try creating and deleting a small test file)
+  const testFileName = `.aw-write-test-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`;
+  const testFilePath = path.join(resolved, testFileName);
+  try {
+    fs.writeFileSync(testFilePath, 'test', 'utf8');
+    fs.unlinkSync(testFilePath);
+  } catch (err) {
+    if (createdDir) {
+      try { fs.rmdirSync(resolved); } catch (_) {}
+    }
+    return { valid: false, error: `Folder is not writable: ${err.message}` };
+  }
+
+  return { valid: true, path: resolved };
 }
 
 /**
@@ -702,5 +810,6 @@ module.exports = {
   getStateLight,
   getSessionSummary,
   formatDecision,
-  getDashboardData
+  getDashboardData,
+  validateLogDir
 };

@@ -1,5 +1,5 @@
 const electron = require('electron');
-const { app, BrowserWindow, ipcMain, session } = (typeof electron === 'object' && electron !== null) ? electron : {};
+const { app, BrowserWindow, ipcMain, session, dialog } = (typeof electron === 'object' && electron !== null) ? electron : {};
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -12,7 +12,8 @@ const {
   setAlwaysOnTop,
   setWindowBounds,
   acquireNotificationLock,
-  getDashboardData
+  getDashboardData,
+  validateLogDir
 } = require('../shared');
 const { SESSIONS_DIR, getSessionStatusList } = require('../status');
 const { NotificationManager } = require('../notifier');
@@ -287,6 +288,11 @@ ipcMain.handle('set-always-on-top', (event, { enabled }) => {
 // Settings tab update IPC
   ipcMain.handle('set-setting', (event, payload) => {
     return setSetting(payload);
+  });
+
+  // Native folder picker IPC
+  ipcMain.handle('pick-log-folder', async () => {
+    return pickLogFolder();
   });
 
 // The ONE fixed function for reading history
@@ -737,7 +743,20 @@ function setSetting(payload = {}, options = {}) {
   } else if (key === 'allowTurnOnFromWindow') {
     cfg.allowTurnOnFromWindow = Boolean(value);
   } else if (key === 'logDir' || key === 'outputDir') {
-    cfg.logDir = typeof value === 'string' ? value.trim() : '';
+    if (!value || typeof value !== 'string' || value.trim() === '') {
+      cfg.logDir = '';
+      delete cfg.outputDir;
+    } else {
+      if (!options.fromPicker) {
+        return { success: false, error: 'Direct or typed log paths are rejected; use Browse to select a folder' };
+      }
+      const val = validateLogDir(value);
+      if (!val.valid) {
+        return { success: false, error: val.error };
+      }
+      cfg.logDir = val.path;
+      delete cfg.outputDir;
+    }
   } else {
     return { success: false, error: `Unknown setting: ${key}` };
   }
@@ -746,7 +765,7 @@ function setSetting(payload = {}, options = {}) {
     return { success: false, error: 'Failed to write config file' };
   }
   sendDashboardUpdate();
-  return { success: true, config: cfg };
+  return { success: true, config: cfg, logDir: cfg.logDir };
 }
 
 // The ONE fixed IPC function for setting session auto state (Stage 6)
@@ -912,9 +931,35 @@ if (ipcMain && typeof ipcMain.handle === 'function') {
   });
 }
 
+// Opens native folder picker and saves through setSetting
+async function pickLogFolder(options = {}) {
+  const targetConfigPath = options.configPath || configPath;
+  const dialogModule = options.dialog || dialog;
+  if (!dialogModule || typeof dialogModule.showOpenDialog !== 'function') {
+    return { success: false, error: 'Native folder picker dialog is not available' };
+  }
+  try {
+    const parent = (mainWindow && !mainWindow.isDestroyed()) ? mainWindow : null;
+    const dialogOpts = {
+      title: 'Select Log Folder',
+      properties: ['openDirectory', 'createDirectory']
+    };
+    const result = parent ? await dialogModule.showOpenDialog(parent, dialogOpts) : await dialogModule.showOpenDialog(dialogOpts);
+    if (!result || result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    const chosenPath = result.filePaths[0];
+    return setSetting({ key: 'logDir', value: chosenPath }, { fromPicker: true, configPath: targetConfigPath });
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
 module.exports = {
   createWindow,
   sendDashboardUpdate,
   setSessionAuto,
-  setSetting
+  setSetting,
+  pickLogFolder,
+  validateLogDir
 };

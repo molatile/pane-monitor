@@ -988,6 +988,12 @@ function validateAllRules(rules, options = {}) {
     if (!Array.isArray(rules.deny)) {
       errors.push('deny must be an array of pattern strings');
     } else {
+      // Must include all built-in deny rules
+      for (const builtin of DEFAULT_RULES.deny) {
+        if (!rules.deny.includes(builtin)) {
+          errors.push(`Built-in deny rule "${builtin}" cannot be removed`);
+        }
+      }
       for (const item of rules.deny) {
         if (typeof item !== 'string' || item.trim().length < 2) {
           errors.push(`Invalid deny rule: "${item}" (must be at least 2 characters)`);
