@@ -57,6 +57,47 @@ function startAgentwatch(options = {}) {
   const choicesPath = options.choicesPath;
   const ancestors = options.ancestors || computeFolderAncestors(rawCwd, agentName);
 
+  const effectiveConfigPath = options.configPath || process.env.AGENTWATCH_CONFIG_PATH;
+  const config = loadConfig(effectiveConfigPath);
+
+  function ensureDirForFile(filePath) {
+    try {
+      if (!filePath) return;
+      const d = path.dirname(filePath);
+      if (!fs.existsSync(d)) {
+        fs.mkdirSync(d, { recursive: true });
+      }
+    } catch (e) {}
+  }
+
+  const effectiveLogDir = options.logDir ||
+    options.outputDir ||
+    process.env.AGENTWATCH_LOG_DIR ||
+    process.env.AGENTWATCH_OUTPUT_DIR ||
+    config.logDir ||
+    config.outputDir ||
+    null;
+
+  const baseDir = effectiveLogDir ? path.resolve(rawCwd, effectiveLogDir) : process.cwd();
+
+  const promptsLogPath = options.promptsLogPath ||
+    process.env.AGENTWATCH_PROMPTS_LOG ||
+    config.promptsLogPath ||
+    path.resolve(baseDir, 'prompts.log');
+
+  const snapshotsPath = options.snapshotsPath ||
+    process.env.AGENTWATCH_SNAPSHOTS_PATH ||
+    config.snapshotsPath ||
+    path.resolve(baseDir, 'screen-snapshots.txt');
+
+  const rawSessionPath = options.rawSessionPath ||
+    process.env.AGENTWATCH_RAW_SESSION_PATH ||
+    config.rawSessionPath ||
+    path.resolve(baseDir, 'raw-session.bin');
+
+  ensureDirForFile(promptsLogPath);
+  ensureDirForFile(snapshotsPath);
+
   // Check for nested folder question at startup
   let initialPendingQuestion = null;
   const choices = loadFolderChoices(choicesPath);
@@ -98,6 +139,71 @@ function startAgentwatch(options = {}) {
 
   let rules = loadRulesForFolder(folderKey, targetRulesPath, folderRulesDir);
   let previousRules = null;
+  let rulesWatcher = null;
+  let reloadDebounceTimer = null;
+
+  function reloadRulesAndReEvaluate(source = 'unknown') {
+    try {
+      const defMtime = fs.existsSync(targetRulesPath) ? fs.statSync(targetRulesPath).mtimeMs : 0;
+      const folMtime = fs.existsSync(folderRulesPath) ? fs.statSync(folderRulesPath).mtimeMs : 0;
+      lastDefaultRulesMtime = defMtime;
+      lastFolderRulesMtime = folMtime;
+      lastRulesReloadTime = Date.now();
+      previousRules = rules;
+      rules = loadRulesForFolder(folderKey, targetRulesPath, folderRulesDir);
+    } catch (e) {}
+
+    if (activePrompt) {
+      reEvaluateActivePrompt();
+    }
+  }
+
+  function reEvaluateActivePrompt() {
+    if (!activePrompt) return;
+    const currentLines = getScreenLines();
+    const detected = extractPromptFromScreen(currentLines, profile) || activePrompt.detected;
+    if (!detected) return;
+
+    activePrompt.detected = detected;
+    const currentRules = loadRulesForFolder(folderKey, targetRulesPath, folderRulesDir);
+    const newDecision = evaluatePrompt(detected, currentRules);
+    activePrompt.decision = newDecision;
+
+    const timestamp = new Date().toISOString();
+    const logLine = `[${timestamp}] Rules reloaded, re-evaluating prompt: ${newDecision.log || newDecision.action}\n`;
+    try {
+      fs.appendFileSync(promptsLogPath, logLine, 'utf8');
+    } catch (e) {}
+
+    if (isPromptEligibleForAuto(detected, newDecision)) {
+      if (!activePrompt.inCountdown) {
+        startPromptCountdown(activePrompt);
+      }
+    } else {
+      if (activePrompt.inCountdown) {
+        cancelCountdown('rules_changed');
+      }
+      statusManager.update('asking', timestamp, {
+        ...detected,
+        decision: newDecision
+      });
+    }
+  }
+
+  try {
+    const watchDir = path.dirname(targetRulesPath);
+    if (fs.existsSync(watchDir)) {
+      rulesWatcher = fs.watch(watchDir, (eventType, filename) => {
+        if (!filename || filename === path.basename(targetRulesPath) || filename.includes('rules')) {
+          if (reloadDebounceTimer) clearTimeout(reloadDebounceTimer);
+          reloadDebounceTimer = setTimeout(() => {
+            reloadRulesAndReEvaluate('watch');
+          }, 50);
+        }
+      });
+      if (rulesWatcher && rulesWatcher.unref) rulesWatcher.unref();
+    }
+  } catch (e) {}
 
   function getEffectiveRules(promptShownTime) {
     try {
@@ -118,13 +224,6 @@ function startAgentwatch(options = {}) {
       }
     } catch (e) {}
 
-    if (promptShownTime && promptShownTime < lastRulesReloadTime && previousRules) {
-      return {
-        ...rules,
-        _inFlightPrompt: true,
-        _oldRules: previousRules
-      };
-    }
     return rules;
   }
 
@@ -178,7 +277,6 @@ function startAgentwatch(options = {}) {
   const sessionStartTime = Date.now();
 
   // Auto-accept configuration (OFF by default, enabled via --auto or config.autoAcceptDefault)
-  const config = loadConfig(options.configPath);
   const initialAutoAccept = options.auto !== undefined
     ? Boolean(options.auto)
     : (options.autoAccept !== undefined ? Boolean(options.autoAccept) : Boolean(config.autoAcceptDefault));
@@ -258,14 +356,11 @@ function startAgentwatch(options = {}) {
     agent: agentName
   }, historyPath);
 
-  const promptsLogPath = options.promptsLogPath || path.resolve(process.cwd(), 'prompts.log');
-  const snapshotsPath = options.snapshotsPath || path.resolve(process.cwd(), 'screen-snapshots.txt');
-
   // Raw session recording stream (OFF by default, only enabled with --record)
   let rawStream = null;
   if (record) {
-    const rawSessionPath = options.rawSessionPath || path.resolve(process.cwd(), 'raw-session.bin');
     try {
+      ensureDirForFile(rawSessionPath);
       rawStream = fs.createWriteStream(rawSessionPath, { flags: 'a' });
       rawStream.on('error', () => {});
     } catch (e) {}
@@ -642,7 +737,7 @@ function startAgentwatch(options = {}) {
     }
 
     // Check config autoPaused
-    const liveCfg = loadConfig(options.configPath);
+    const liveCfg = loadConfig(effectiveConfigPath);
     if (liveCfg.autoPaused) {
       return false;
     }
@@ -669,7 +764,7 @@ function startAgentwatch(options = {}) {
       return;
     }
 
-    const liveCfg = loadConfig(options.configPath);
+    const liveCfg = loadConfig(effectiveConfigPath);
     if (liveCfg.autoPaused) {
       cancelCountdown('auto_paused');
       return;
@@ -881,6 +976,7 @@ function startAgentwatch(options = {}) {
     const timestamp = new Date().toISOString();
     const entry = `[${timestamp}]\n${snapshotText}\n\n`;
     try {
+      ensureDirForFile(snapshotsPath);
       fs.appendFileSync(snapshotsPath, entry, 'utf8');
     } catch (err) {}
   }
@@ -1286,6 +1382,14 @@ function startAgentwatch(options = {}) {
             activePrompt.decision = currentDecision;
             cancelCountdown('danger');
           }
+        } else {
+          // If activePrompt is at a halt (not in countdown), check if rules allow it to move forward now!
+          const checkRules = getEffectiveRules();
+          const currentDecision = evaluatePrompt(detected, checkRules);
+          if (currentDecision.action === 'would_approve' && isPromptEligibleForAuto(detected, currentDecision)) {
+            activePrompt.decision = currentDecision;
+            startPromptCountdown(activePrompt);
+          }
         }
       }
     } else {
@@ -1453,6 +1557,11 @@ function startAgentwatch(options = {}) {
     if (countdownTimer) clearInterval(countdownTimer);
     if (quietTimer) clearTimeout(quietTimer);
     if (promptDebounceTimer) clearTimeout(promptDebounceTimer);
+    if (reloadDebounceTimer) clearTimeout(reloadDebounceTimer);
+    if (rulesWatcher) {
+      try { rulesWatcher.close(); } catch (e) {}
+      rulesWatcher = null;
+    }
     clearInterval(checkInterval);
 
     term.write('', () => {
@@ -1547,10 +1656,21 @@ function startAgentwatch(options = {}) {
     getControlFilePath: () => controlFilePath,
     getAutoOnTimestamp: () => autoOnTimestamp,
     setAutoOnTimestamp: (ts) => { autoOnTimestamp = ts; },
+    getPromptsLogPath: () => promptsLogPath,
+    getSnapshotsPath: () => snapshotsPath,
+    getRawSessionPath: () => rawSessionPath,
+    promptsLogPath,
+    snapshotsPath,
+    rawSessionPath,
     cleanup: () => {
       if (countdownTimer) clearInterval(countdownTimer);
       if (quietTimer) clearTimeout(quietTimer);
       if (promptDebounceTimer) clearTimeout(promptDebounceTimer);
+      if (reloadDebounceTimer) clearTimeout(reloadDebounceTimer);
+      if (rulesWatcher) {
+        try { rulesWatcher.close(); } catch (e) {}
+        rulesWatcher = null;
+      }
       clearInterval(checkInterval);
       try {
         if (fs.existsSync(controlFilePath)) {
@@ -1569,7 +1689,15 @@ function startAgentwatch(options = {}) {
  */
 function logPromptRecord(detected, decision, options = {}) {
   const timestamp = options.timestamp || new Date().toISOString();
-  const promptsLogPath = options.promptsLogPath || path.resolve(process.cwd(), 'prompts.log');
+  const effectiveLogDir = options.logDir ||
+    options.outputDir ||
+    process.env.AGENTWATCH_LOG_DIR ||
+    process.env.AGENTWATCH_OUTPUT_DIR ||
+    null;
+  const baseDir = effectiveLogDir ? path.resolve(options.cwd || process.cwd(), effectiveLogDir) : (options.cwd || process.cwd());
+  const promptsLogPath = options.promptsLogPath ||
+    process.env.AGENTWATCH_PROMPTS_LOG ||
+    path.resolve(baseDir, 'prompts.log');
   const historyPath = options.historyPath;
   const sessionId = options.sessionId || `session-${Date.now()}`;
   const profile = options.profile;
@@ -1618,6 +1746,10 @@ function logPromptRecord(detected, decision, options = {}) {
   entry += `Outcome: shown\n`;
 
   try {
+    const dir = path.dirname(promptsLogPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
     fs.appendFileSync(promptsLogPath, entry, 'utf8');
   } catch (err) {}
 

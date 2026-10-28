@@ -20,6 +20,7 @@ module.exports = {
   setAutoPaused: shared.setAutoPaused,
   setAutoAcceptDefault: shared.setAutoAcceptDefault,
   setTimeFormat: shared.setTimeFormat,
+  setLogDir: shared.setLogDir,
   isGuiRunning: shared.isGuiRunning,
   orderSessions: shared.orderSessions,
   reorderSession: shared.reorderSession,

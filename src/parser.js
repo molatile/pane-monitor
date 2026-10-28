@@ -81,7 +81,8 @@ function extractPromptFromScreen(screenLines, profile) {
     // Check footer prefix: e.g. "↑/↓ Navigate" or regex
     if (
       trimmed.startsWith(footerPrefix) ||
-      (footerPrefix.includes('Navigate') && /^[↑^]\/[↓v]?\s*Navigate/i.test(trimmed))
+      (footerPrefix.includes('Navigate') && /^[↑^]\/[↓v]?\s*Navigate/i.test(trimmed)) ||
+      /^(?:[↑^]\/[↓v]?\s*Navigate|navigate\b|use\s+arrow\s+keys|press\s+enter|esc\s+to\s+cancel|tab\s+amend|ctrl\+[a-z]\s+edit)/i.test(trimmed)
     ) {
       footerSeen = true;
       break;
@@ -111,10 +112,20 @@ function extractPromptFromScreen(screenLines, profile) {
     return null;
   }
 
-  // Ensure consecutive option numbering 1..N
+  // Ensure consecutive option numbering 1..N or normalize
+  let isStrictConsecutive = true;
   for (let idx = 0; idx < rawOptions.length; idx++) {
     if (rawOptions[idx].number !== idx + 1) {
-      return null;
+      isStrictConsecutive = false;
+      break;
+    }
+  }
+  if (!isStrictConsecutive) {
+    for (let idx = 0; idx < rawOptions.length; idx++) {
+      if (isNaN(rawOptions[idx].number)) {
+        rawOptions[idx].number = idx + 1;
+        rawOptions[idx].key = String(idx + 1);
+      }
     }
   }
 

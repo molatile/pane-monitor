@@ -77,17 +77,17 @@ function classifyOption(optionText, profile) {
   }
 
   // "yes_session" = starts with "Yes" and contains "always allow in this conversation"
-  if (/^yes\b/i.test(text) && lower.includes('always allow in this conversation')) {
+  if ((/^yes\b/i.test(text) || lower.startsWith('always')) && (lower.includes('always allow in this conversation') || lower.includes('for this session'))) {
     return 'yes_session';
   }
 
-  // "yes_once" = starts with "Yes" and contains neither "always" nor "persist"
-  if (/^yes\b/i.test(text) && !lower.includes('always') && !lower.includes('persist')) {
+  // "yes_once" = starts with affirmative word and contains neither "always" nor "persist"
+  if (/^(?:yes|allow|proceed|confirm|run|continue|execute|accept|ok)\b/i.test(text) && !lower.includes('always') && !lower.includes('persist')) {
     return 'yes_once';
   }
 
-  // "no" = starts with "No"
-  if (/^no\b/i.test(text)) {
+  // "no" = starts with negative word
+  if (/^(?:no|cancel|abort|reject|skip|exit|quit|dismiss|don'?t)\b/i.test(text)) {
     return 'no';
   }
 

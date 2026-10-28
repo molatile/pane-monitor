@@ -133,6 +133,7 @@
 | `tests/test-unit.js` | Unit tests for parser and state tracker. |
 | `tests/test-fast-prompt.js` | Fast prompt dismissal integration test (< 500 ms). |
 | `tests/test-integration.js` | End-to-end integration tests with mock CLI apps. |
+| `tests/test-custom-locations.js` | Custom locations test suite: custom log/snapshot directories, CLI flags, env vars, config persistence, and non-existent folder auto-creation. |
 
 ---
 
@@ -194,6 +195,38 @@ With raw session stream recording enabled:
 ```bash
 agentwatch --record agy
 ```
+
+With custom storage location for logs and snapshots:
+```bash
+# Store all logs, screen snapshots, and recordings in a designated directory
+agentwatch --log-dir D:\my-agent-logs agy
+
+# Or specify individual target files
+agentwatch --snapshots D:\my-agent-logs\snapshots.txt --prompts-log D:\my-agent-logs\prompts.log agy
+```
+
+### Customizing Log & Snapshot Locations
+
+By default, `prompts.log`, `screen-snapshots.txt`, and `raw-session.bin` are saved in the current working directory. You can customize the storage location in any of four ways:
+
+1. **CLI Flags**:
+   - `--log-dir <dir>` or `--output-dir <dir>`: Sets directory for `prompts.log`, `screen-snapshots.txt`, and `raw-session.bin`.
+   - `--prompts-log <path>`: Specifies custom path for the prompt log.
+   - `--snapshots <path>`: Specifies custom path for screen snapshots.
+   - `--raw-session <path>`: Specifies custom path for raw session recording.
+   *(Parent directories are created automatically if they do not exist)*
+
+2. **Environment Variables**:
+   - `AGENTWATCH_LOG_DIR` or `AGENTWATCH_OUTPUT_DIR`
+   - `AGENTWATCH_PROMPTS_LOG`
+   - `AGENTWATCH_SNAPSHOTS_PATH`
+   - `AGENTWATCH_RAW_SESSION_PATH`
+
+3. **Persistent Configuration (`~/.agentwatch/config.json`)**:
+   Add `"logDir": "C:\\path\\to\\logs"` to your config file to use that location automatically for all sessions.
+
+4. **Programmatic Options (`startAgentwatch`)**:
+   Pass `{ logDir, promptsLogPath, snapshotsPath, rawSessionPath }` in `options`.
 
 ### 2. Launching the Live Terminal Dashboard
 ```bash

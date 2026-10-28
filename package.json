@@ -8,7 +8,8 @@
     "spike": "./spike.js"
   },
   "scripts": {
-    "test": "node tests/test-unit.js && node tests/test-agentwatch.js && node tests/test-dashboard.js && node tests/test-rules.js && node tests/test-danger.js && node tests/test-rules-hotreload-and-history.js",
+    "test": "node tests/test-unit.js && node tests/test-agentwatch.js && node tests/test-dashboard.js && node tests/test-rules.js && node tests/test-danger.js && node tests/test-rules-hotreload-and-history.js && node tests/test-custom-locations.js",
+    "test:locations": "node tests/test-custom-locations.js",
     "test:hotreload": "node tests/test-rules-hotreload-and-history.js",
     "test:danger": "node tests/test-danger.js",
     "test:unit": "node tests/test-unit.js",
@@ -28,7 +29,7 @@
     "test:stage6": "node tests/test-stage6.js",
     "test:unselect": "node tests/test-gui-unselect.js",
     "test:lifecycle": "node tests/test-gui-lifecycle.js",
-    "test:all": "npm test && npm run test:gui && npm run test:lifecycle && npm run test:stage3a && npm run test:stage3b && npm run test:stage4 && npm run test:stage4b && npm run test:stage4c && npm run test:stage4d && npm run test:stage5 && npm run test:stage6 && npm run test:unselect && npm run test:fast && npm run test:integration",
+    "test:all": "npm test && npm run test:locations && npm run test:gui && npm run test:lifecycle && npm run test:stage3a && npm run test:stage3b && npm run test:stage4 && npm run test:stage4b && npm run test:stage4c && npm run test:stage4d && npm run test:stage5 && npm run test:stage6 && npm run test:unselect && npm run test:fast && npm run test:integration",
     "dash": "node bin/agentwatch.js dash",
     "gui": "node bin/agentwatch.js gui"
   },

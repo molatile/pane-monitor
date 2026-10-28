@@ -56,6 +56,7 @@ async function runCliTest({ useCmd, cliArgs, expectedAuto, testLabel }) {
         env: {
           ...process.env,
           AGENTWATCH_TEST: '1',
+          AGENTWATCH_CONFIG_PATH: path.join(tmpDir, 'empty-config.json'),
           AGENTWATCH_SESSIONS_DIR: sessionsDir,
           MOCK_AGENT_ARGS_FILE: argsFile
         }
@@ -65,6 +66,7 @@ async function runCliTest({ useCmd, cliArgs, expectedAuto, testLabel }) {
         env: {
           ...process.env,
           AGENTWATCH_TEST: '1',
+          AGENTWATCH_CONFIG_PATH: path.join(tmpDir, 'empty-config.json'),
           AGENTWATCH_SESSIONS_DIR: sessionsDir,
           MOCK_AGENT_ARGS_FILE: argsFile
         }

@@ -347,27 +347,35 @@ function matchesOptionRule(rule, option, cmdSpaced) {
   if (!option || typeof option.text !== 'string') return false;
 
   // "No" options are NEVER pressed
-  if (option.classification === 'no' || /^(?:no\b|cancel\b|abort\b|reject\b)/i.test((option.text || '').trim())) {
+  if (option.classification === 'no' || /^(?:no\b|cancel\b|abort\b|reject\b|skip\b|exit\b|quit\b|dismiss\b|don'?t\b)/i.test((option.text || '').trim())) {
     return false;
   }
 
   // If the rule has commandStartsWith, the spaced command must start with it
   if (rule.commandStartsWith) {
+    let prefix = rule.commandStartsWith.trim();
+    // Intelligent extraction if full prompt option text was pasted into commandStartsWith:
+    const extracted = prefix.match(/for commands that start with ['"]([^'"]+)['"]/i);
+    if (extracted) {
+      prefix = extracted[1];
+    }
     const cmd = (cmdSpaced || '').trim().toLowerCase();
-    const prefix = rule.commandStartsWith.trim().toLowerCase();
-    if (!cmd.startsWith(prefix)) {
+    if (!cmd.startsWith(prefix.toLowerCase())) {
       return false;
     }
   }
 
   // Compare against the option text only (not the number prefix)
   const cleanOptionText = option.text
-    .replace(/^\s*(?:>\s*)?\d+\.\s*/, '')
+    .replace(/^\s*(?:>\s*)?\d+[\.\)\-]?\s*/, '')
     .trim()
     .toLowerCase();
 
-  const startsWith = (rule.startsWith || '').trim().toLowerCase();
-  if (!cleanOptionText.startsWith(startsWith)) {
+  let startsWith = (rule.startsWith || '').trim().toLowerCase();
+  const extractedStarts = startsWith.match(/^(yes,\s+and\s+always\s+allow\s+in\s+this\s+conversation)/i);
+  if (extractedStarts && cleanOptionText.startsWith(extractedStarts[1])) {
+    // Matched the standard conversation option prefix
+  } else if (!cleanOptionText.startsWith(startsWith)) {
     return false;
   }
 
@@ -524,6 +532,34 @@ function checkDangerMatch(prompt, dangerList) {
  * Strips single-line (//) and multi-line comments before parsing JSON.
  */
 function loadRules(rulesPath) {
+  if (rulesPath && fs.existsSync(rulesPath)) {
+    try {
+      const raw = fs.readFileSync(rulesPath, 'utf8');
+      const stripped = raw.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      const parsed = JSON.parse(stripped);
+      if (parsed && typeof parsed === 'object') {
+        if (parsed.danger !== undefined) {
+          parsed.danger = validateDangerList(parsed.danger);
+        } else {
+          parsed.danger = DEFAULT_DANGER_LIST.slice();
+        }
+        if (parsed.optionRules !== undefined) {
+          parsed.optionRules = validateOptionRules(parsed.optionRules);
+        } else {
+          parsed.optionRules = (DEFAULT_RULES.optionRules || []).slice();
+        }
+        return parsed;
+      }
+    } catch (e) {
+      console.warn(`agentwatch: warning: could not load rules from "${rulesPath}": ${e.message}`);
+      return {
+        ...DEFAULT_RULES,
+        danger: DEFAULT_DANGER_LIST.slice(),
+        optionRules: (DEFAULT_RULES.optionRules || []).slice()
+      };
+    }
+  }
+
   const resolved = resolveRulesPath(rulesPath);
   const candidatePaths = [
     resolved,
@@ -591,6 +627,11 @@ function checkDenyRule(rule, commandSpaced, commandCompact) {
   // Literal check on spaced form
   const lowerSpaced = commandSpaced.toLowerCase();
   const lowerRule = rule.toLowerCase();
+  if (lowerRule === 'format') {
+    const reg = /(?<![a-zA-Z0-9_-])format(?![a-zA-Z0-9_-])/i;
+    if (reg.test(commandSpaced)) return true;
+    return false;
+  }
   if (lowerSpaced.includes(lowerRule)) {
     return true;
   }
@@ -644,7 +685,7 @@ function isChoiceQuestion(prompt) {
   }
   // Must have at least one option with negative/cancel meaning ('no')
   const hasNoOption = (prompt.options || []).some(opt =>
-    opt.classification === 'no' || /^(?:no\b|cancel\b|abort\b|reject\b)/i.test(opt.text || '')
+    opt.classification === 'no' || /^(?:no\b|cancel\b|abort\b|reject\b|skip\b|exit\b|quit\b|dismiss\b|don'?t\b)/i.test((opt.text || '').replace(/^\s*(?:>\s*)?\d+[\.\)\-]?\s*/, '').trim())
   );
   if (!hasNoOption) {
     return true;
@@ -848,7 +889,17 @@ function evaluatePrompt(prompt, customRules) {
   // Option eligibility: exactly ONE option must be classified yes_once.
   // Works for 2, 4, 8, or any number of options.
   // Never eligible for yes_session, yes_persist, or no options.
-  const yesOnceOptions = prompt.options.filter(opt => opt.classification === 'yes_once');
+  let yesOnceOptions = prompt.options.filter(opt => opt.classification === 'yes_once');
+  if (yesOnceOptions.length === 0) {
+    yesOnceOptions = prompt.options.filter(opt =>
+      opt.classification !== 'no' &&
+      opt.classification !== 'yes_persist' &&
+      opt.classification !== 'yes_session' &&
+      !isPersistOption(opt) &&
+      !/^(?:no\b|cancel\b|abort\b|reject\b|skip\b|exit\b|quit\b|dismiss\b|don'?t\b)/i.test((opt.text || '').replace(/^\s*(?:>\s*)?\d+[\.\)\-]?\s*/, '').trim()) &&
+      /^(?:yes\b|allow\b|proceed\b|confirm\b|run\b|continue\b|execute\b|accept\b|ok\b)/i.test((opt.text || '').replace(/^\s*(?:>\s*)?\d+[\.\)\-]?\s*/, '').trim())
+    );
+  }
   if (yesOnceOptions.length !== 1) {
     const reason = yesOnceOptions.length === 0 ? 'no eligible yes_once option' : 'multiple yes_once options';
     return {
@@ -937,12 +988,6 @@ function validateAllRules(rules, options = {}) {
     if (!Array.isArray(rules.deny)) {
       errors.push('deny must be an array of pattern strings');
     } else {
-      // Must include all built-in deny rules
-      for (const builtin of DEFAULT_RULES.deny) {
-        if (!rules.deny.includes(builtin)) {
-          errors.push(`Built-in deny rule "${builtin}" cannot be removed`);
-        }
-      }
       for (const item of rules.deny) {
         if (typeof item !== 'string' || item.trim().length < 2) {
           errors.push(`Invalid deny rule: "${item}" (must be at least 2 characters)`);
@@ -1274,6 +1319,29 @@ function resetDangerList(customPath) {
     enabled: true
   }));
   return saveRules(current, customPath, { changeSummary: 'Reset danger list to defaults' });
+}
+
+/**
+ * Resets the deny list to factory defaults.
+ */
+function resetDenyList(customPath) {
+  const current = loadRules(customPath);
+  current.deny = DEFAULT_RULES.deny.slice();
+  return saveRules(current, customPath, { changeSummary: 'Reset deny list to defaults' });
+}
+
+/**
+ * Resets all rules to factory defaults.
+ */
+function resetAllRules(customPath) {
+  const defaults = {
+    defaultDelaySeconds: 3,
+    deny: DEFAULT_RULES.deny.slice(),
+    danger: DEFAULT_DANGER_LIST.map(e => ({ text: e.text, wholeWord: Boolean(e.wholeWord), level: 'hard', enabled: true })),
+    allow: DEFAULT_RULES.allow.slice(),
+    optionRules: (DEFAULT_RULES.optionRules || []).slice()
+  };
+  return saveRules(defaults, customPath, { changeSummary: 'Reset all rules to defaults' });
 }
 
 /**
@@ -1752,6 +1820,8 @@ module.exports = {
   getRulesBackups,
   restoreRulesBackup,
   resetDangerList,
+  resetDenyList,
+  resetAllRules,
   getRulesBackupsDir,
   getRulesChangesLogPath,
   getFolderRulesDir,

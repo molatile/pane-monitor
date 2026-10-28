@@ -2590,44 +2590,28 @@ function renderDenyList() {
   denyListContainer.innerHTML = '';
 
   const deny = workingRules.deny || [];
-  const defaultDenySet = new Set([
-    'rm -rf', 'rmdir /s', 'del /f', 'Remove-Item -Recurse', 'format',
-    'git push --force', 'git reset --hard',
-    'curl.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)',
-    'wget.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)',
-    'powershell -enc', 'sudo', 'chmod 777', '.env', 'settings.json', '.ssh', 'credentials'
-  ]);
 
   deny.forEach((pattern, index) => {
-    const isBuiltin = defaultDenySet.has(pattern);
     const tag = document.createElement('span');
-    tag.className = `deny-tag ${isBuiltin ? 'builtin' : ''}`;
+    tag.className = 'deny-tag';
 
     const textSpan = document.createElement('span');
     textSpan.textContent = pattern;
     tag.appendChild(textSpan);
 
-    if (isBuiltin) {
-      const lock = document.createElement('span');
-      lock.className = 'lock-badge';
-      lock.title = 'Built-in deny entry (read-only)';
-      lock.textContent = '🔒';
-      tag.appendChild(lock);
-    } else {
-      const delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'btn btn-danger btn-sm';
-      delBtn.style.padding = '1px 4px';
-      delBtn.style.fontSize = '10px';
-      delBtn.textContent = '✕';
-      delBtn.title = 'Remove custom deny entry';
-      delBtn.addEventListener('click', () => {
-        workingRules.deny.splice(index, 1);
-        renderDenyList();
-        updateRulesTopBar();
-      });
-      tag.appendChild(delBtn);
-    }
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'btn btn-danger btn-sm';
+    delBtn.style.padding = '1px 4px';
+    delBtn.style.fontSize = '10px';
+    delBtn.textContent = '✕';
+    delBtn.title = 'Remove deny entry';
+    delBtn.addEventListener('click', () => {
+      workingRules.deny.splice(index, 1);
+      renderDenyList();
+      updateRulesTopBar();
+    });
+    tag.appendChild(delBtn);
 
     denyListContainer.appendChild(tag);
   });
@@ -2980,6 +2964,51 @@ if (rulesResetDangerBtn) {
           renderRulesView();
         }
       });
+    }
+  });
+}
+
+const rulesResetDenyBtn = getEl('rules-reset-deny-btn');
+if (rulesResetDenyBtn) {
+  rulesResetDenyBtn.addEventListener('click', () => {
+    if (!workingRules) return;
+    const ok = window.confirm('Reset deny list to factory defaults?');
+    if (!ok) return;
+    workingRules.deny = [
+      'rm -rf', 'rmdir /s', 'del /f', 'Remove-Item -Recurse', 'format',
+      'git push --force', 'git reset --hard',
+      'curl.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)',
+      'wget.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)',
+      'powershell -enc', 'sudo', 'chmod 777', '.env', 'settings.json', '.ssh', 'credentials'
+    ];
+    renderDenyList();
+    updateRulesTopBar();
+  });
+}
+
+const rulesResetAllBtn = getEl('rules-reset-all-btn');
+if (rulesResetAllBtn) {
+  rulesResetAllBtn.addEventListener('click', () => {
+    if (!workingRules) return;
+    const ok = window.confirm('Restore all rules to factory defaults? This will restore default deny, danger, allow, and option rules.');
+    if (!ok) return;
+    workingRules.defaultDelaySeconds = 3;
+    workingRules.deny = [
+      'rm -rf', 'rmdir /s', 'del /f', 'Remove-Item -Recurse', 'format',
+      'git push --force', 'git reset --hard',
+      'curl.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)',
+      'wget.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)',
+      'powershell -enc', 'sudo', 'chmod 777', '.env', 'settings.json', '.ssh', 'credentials'
+    ];
+    workingRules.optionRules = [];
+    if (window.agentwatch && window.agentwatch.resetDangerRules) {
+      window.agentwatch.resetDangerRules().then(() => {
+        renderRulesView();
+        updateRulesTopBar();
+      });
+    } else {
+      renderRulesView();
+      updateRulesTopBar();
     }
   });
 }

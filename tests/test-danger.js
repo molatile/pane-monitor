@@ -71,7 +71,7 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
 
 (async function runAllDangerTests() {
   const loadedRules = loadRules();
-  const dangerList = loadedRules.danger || DEFAULT_DANGER_LIST;
+  const dangerList = DEFAULT_DANGER_LIST;
 
   // -------------------------------------------------------------
   // Suite 1: Each Seeded Word Triggers
@@ -323,10 +323,11 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
   // Suite 5: Danger Beats Allow Rule and Option Rule
   // -------------------------------------------------------------
   startSuite('Suite 5: Danger Beats Allow Rule and Option Rule');
+  const dangerTestRules = { danger: dangerList, allow: DEFAULT_RULES.allow, deny: [] };
 
   test('Danger beats allow rule "echo-safe" when danger word present in command', () => {
     const prompt = makePrompt('echo delete');
-    const d = evaluatePrompt(prompt);
+    const d = evaluatePrompt(prompt, dangerTestRules);
     assert.notStrictEqual(d.action, 'would_approve', 'Danger must defeat allow rule');
     assert.strictEqual(d.action, 'needs_user');
     assert.strictEqual(d.danger, true);
@@ -335,7 +336,7 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
 
   test('Danger beats allow rule "git-readonly" when danger word in question', () => {
     const prompt = makePrompt('git status', null, null, 'Do you want to delete everything?');
-    const d = evaluatePrompt(prompt);
+    const d = evaluatePrompt(prompt, dangerTestRules);
     assert.notStrictEqual(d.action, 'would_approve', 'Danger in question must defeat allow rule');
     assert.strictEqual(d.action, 'needs_user');
     assert.strictEqual(d.danger, true);
@@ -344,7 +345,7 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
 
   test('Danger beats allow rule "file-list" when secret target mentioned', () => {
     const prompt = makePrompt('ls secret');
-    const d = evaluatePrompt(prompt);
+    const d = evaluatePrompt(prompt, dangerTestRules);
     assert.notStrictEqual(d.action, 'would_approve', 'Danger must defeat file-list allow rule');
     assert.strictEqual(d.action, 'needs_user');
     assert.strictEqual(d.danger, true);
@@ -361,7 +362,7 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
         { key: '2', number: 2, text: 'No, cancel', classification: 'no' }
       ]
     };
-    const d = evaluatePrompt(prompt);
+    const d = evaluatePrompt(prompt, dangerTestRules);
     assert.notStrictEqual(d.action, 'would_approve');
     assert.strictEqual(d.action, 'needs_user');
   });
@@ -484,10 +485,14 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
     fs.mkdirSync(tempDir, { recursive: true });
 
     try {
+      const tempRulesPath = path.join(tempDir, 'rules.json');
+      fs.writeFileSync(tempRulesPath, JSON.stringify({ danger: DEFAULT_DANGER_LIST }), 'utf8');
+
       const monitor = startAgentwatch({
         command: 'node',
         args: ['-e', 'process.exit(0)'],
         stdout: stdoutMock,
+        rulesPath: tempRulesPath,
         sessionsDir: tempDir,
         historyPath: path.join(tempDir, 'history.jsonl'),
         promptsLogPath: path.join(tempDir, 'prompts.log'),

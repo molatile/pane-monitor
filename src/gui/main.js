@@ -736,6 +736,8 @@ function setSetting(payload = {}, options = {}) {
     cfg.autoAcceptDefault = Boolean(value);
   } else if (key === 'allowTurnOnFromWindow') {
     cfg.allowTurnOnFromWindow = Boolean(value);
+  } else if (key === 'logDir' || key === 'outputDir') {
+    cfg.logDir = typeof value === 'string' ? value.trim() : '';
   } else {
     return { success: false, error: `Unknown setting: ${key}` };
   }

@@ -74,7 +74,12 @@ function loadConfig(configPath = CONFIG_PATH) {
             y: typeof parsed.window.y === 'number' ? parsed.window.y : undefined
           }
         : { width: 420, height: 360 },
-      notified: (parsed.notified && typeof parsed.notified === 'object') ? parsed.notified : {}
+      notified: (parsed.notified && typeof parsed.notified === 'object') ? parsed.notified : {},
+      logDir: typeof parsed.logDir === 'string' ? parsed.logDir : (typeof parsed.outputDir === 'string' ? parsed.outputDir : undefined),
+      outputDir: typeof parsed.outputDir === 'string' ? parsed.outputDir : undefined,
+      promptsLogPath: typeof parsed.promptsLogPath === 'string' ? parsed.promptsLogPath : undefined,
+      snapshotsPath: typeof parsed.snapshotsPath === 'string' ? parsed.snapshotsPath : undefined,
+      rawSessionPath: typeof parsed.rawSessionPath === 'string' ? parsed.rawSessionPath : undefined
     };
   } catch (e) {
     return {
@@ -135,6 +140,21 @@ function saveConfig(config, configPath = CONFIG_PATH) {
     }
     if (typeof config.guiStartTime === 'number') {
       sanitized.guiStartTime = config.guiStartTime;
+    }
+    if (typeof config.logDir === 'string') {
+      sanitized.logDir = config.logDir;
+    }
+    if (typeof config.outputDir === 'string') {
+      sanitized.outputDir = config.outputDir;
+    }
+    if (typeof config.promptsLogPath === 'string') {
+      sanitized.promptsLogPath = config.promptsLogPath;
+    }
+    if (typeof config.snapshotsPath === 'string') {
+      sanitized.snapshotsPath = config.snapshotsPath;
+    }
+    if (typeof config.rawSessionPath === 'string') {
+      sanitized.rawSessionPath = config.rawSessionPath;
     }
 
     if (config.window && typeof config.window === 'object') {
@@ -379,6 +399,15 @@ function setAllowTurnOnFromWindow(config, enabled, configPath = CONFIG_PATH) {
  */
 function setTimeFormat(config, format, configPath = CONFIG_PATH) {
   config.timeFormat = (format === '12-hour' || format === '12h') ? '12-hour' : '24-hour';
+  saveConfig(config, configPath);
+  return config;
+}
+
+/**
+ * Sets custom output directory for logs and snapshots and saves the configuration.
+ */
+function setLogDir(config, logDir, configPath = CONFIG_PATH) {
+  config.logDir = typeof logDir === 'string' ? logDir : '';
   saveConfig(config, configPath);
   return config;
 }
@@ -661,6 +690,7 @@ module.exports = {
   setAutoAcceptDefault,
   setAllowTurnOnFromWindow,
   setTimeFormat,
+  setLogDir,
   isGuiRunning,
   stopGui,
   getGuiSourceMtime,
