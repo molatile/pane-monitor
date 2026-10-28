@@ -5,6 +5,7 @@
     "rmdir /s",
     "del /f",
     "Remove-Item -Recurse",
+    "format",
     "git push --force",
     "git reset --hard",
     "curl.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)",
@@ -299,6 +300,14 @@
       "commandStartsWith": "Yes, accept this change",
       "enabled": true,
       "allowPersist": false
+    },
+    {
+      "name": "accept-file-edit",
+      "startsWith": "Yes, accept",
+      "promptTypes": [
+        "file_edit"
+      ],
+      "enabled": false
     }
   ]
 }

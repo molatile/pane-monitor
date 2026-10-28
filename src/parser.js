@@ -1,4 +1,103 @@
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { getProfileForCommand, classifyOption } = require('./profile');
+const { maskText } = require('./masker');
+const { extractTargetFilePath } = require('./rules');
+
+/**
+ * Checks if a string line is a separator line (composed of 3+ separator characters).
+ */
+function isSeparatorLine(line) {
+  if (!line) return false;
+  const text = typeof line === 'string' ? line : (line && line.text ? line.text : '');
+  const trimmed = text.trim();
+  if (trimmed.length < 3) return false;
+  return /^[─\-_=~*—\s]+$/.test(trimmed) && trimmed.replace(/\s+/g, '').length >= 3;
+}
+
+const loggedUnknownSignatures = new Set();
+
+/**
+ * Appends a masked sample of an unrecognized prompt to ~/.agentwatch/unknown-prompts.log.
+ * At most once per distinct sample, keeping the file under 200 KB.
+ */
+function appendUnknownPromptSample(sample, options = {}) {
+  if (!sample || !sample.question || !Array.isArray(sample.options)) return false;
+
+  const agentwatchDir = process.env.AGENTWATCH_DIR || path.join(os.homedir(), '.agentwatch');
+  const logFilePath = options.unknownPromptsLogPath ||
+    process.env.AGENTWATCH_UNKNOWN_PROMPTS_LOG ||
+    path.join(agentwatchDir, 'unknown-prompts.log');
+
+  const maskedQuestion = maskText(sample.question || '');
+  const maskedContext = (sample.contextLines || []).slice(-10).map(l => maskText(typeof l === 'string' ? l : (l?.text || '')));
+  const maskedOptions = (sample.options || []).map(o => {
+    const num = o.key || o.number || '';
+    const txt = typeof o === 'string' ? o : (o.text || '');
+    return `${num ? num + '. ' : ''}${maskText(txt)}`;
+  });
+
+  const distinctSignature = `${maskedQuestion.trim()}:::${maskedOptions.map(o => o.trim()).join('|')}`;
+  if (loggedUnknownSignatures.has(distinctSignature)) {
+    return false;
+  }
+
+  try {
+    const dir = path.dirname(logFilePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    let existingContent = '';
+    if (fs.existsSync(logFilePath)) {
+      existingContent = fs.readFileSync(logFilePath, 'utf8');
+      if (existingContent.includes(distinctSignature)) {
+        loggedUnknownSignatures.add(distinctSignature);
+        return false;
+      }
+    }
+
+    const timestamp = new Date().toISOString();
+    let entry = `[${timestamp}] UNRECOGNIZED PROMPT\n`;
+    entry += `Signature: ${distinctSignature}\n`;
+    entry += `Question: ${maskedQuestion}\n`;
+    if (maskedContext.length > 0) {
+      entry += `Context:\n`;
+      for (const cl of maskedContext) {
+        entry += `  ${cl}\n`;
+      }
+    }
+    entry += `Options:\n`;
+    for (const opt of maskedOptions) {
+      entry += `  ${opt}\n`;
+    }
+    entry += `\n`;
+
+    const MAX_SIZE = 200 * 1024; // 200 KB
+    let combined = existingContent + entry;
+    let buf = Buffer.from(combined, 'utf8');
+
+    if (buf.length > MAX_SIZE) {
+      // Trim oldest entries from beginning to keep under 200 KB
+      while (buf.length > MAX_SIZE - 2048 && combined.includes('\n\n')) {
+        const nextSep = combined.indexOf('\n[', 1);
+        if (nextSep === -1) {
+          combined = combined.slice(-Math.floor(MAX_SIZE * 0.75));
+          break;
+        }
+        combined = combined.slice(nextSep + 1);
+        buf = Buffer.from(combined, 'utf8');
+      }
+    }
+
+    fs.writeFileSync(logFilePath, combined, 'utf8');
+    loggedUnknownSignatures.add(distinctSignature);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
 
 /**
  * Parses visible terminal screen lines to detect permission prompts
@@ -11,144 +110,316 @@ function extractPromptFromScreen(screenLines, profile) {
   if (!screenLines || screenLines.length === 0) return null;
 
   const activeProfile = profile || getProfileForCommand('agy');
-  const promptConfig = (activeProfile && activeProfile.prompt) ? activeProfile.prompt : {
-    commandBlockStart: 'Requesting permission for:',
-    questionPattern: 'Run this command\\?',
-    footerPrefix: '↑/↓ Navigate',
-    optionLinePattern: '^\\s*>?\\s*(\\d+)\\.\\s+(.*)$',
-    minOptions: 2
-  };
+  const lineTexts = screenLines.map(l => (typeof l === 'string' ? l : (l && l.text ? l.text : '')));
 
-  const blockStartRegex = new RegExp(promptConfig.commandBlockStart, 'i');
-  const questionRegex = new RegExp(promptConfig.questionPattern, 'i');
-  const optionRegex = new RegExp(promptConfig.optionLinePattern || '^\\s*>?\\s*(\\d+)\\.\\s+(.*)$');
-  const footerPrefix = promptConfig.footerPrefix || '↑/↓ Navigate';
-  const minOptions = promptConfig.minOptions !== undefined ? promptConfig.minOptions : 2;
-
-  // 1. Locate command block start (e.g. "Requesting permission for:") searching bottom-up
-  let reqIndex = -1;
-  for (let i = screenLines.length - 1; i >= 0; i--) {
-    if (screenLines[i] && blockStartRegex.test(screenLines[i].text)) {
-      reqIndex = i;
-      break;
+  // Resolve prompt types list from profile
+  const defaultPromptTypes = [
+    {
+      name: 'command',
+      contextStart: 'Requesting permission for:',
+      questionPattern: 'Run this command\\??',
+      footerPattern: '↑/↓ Navigate',
+      optionLinePattern: '^\\s*>?\\s*(\\d+)\\.\\s+(.*)$',
+      minOptions: 2
+    },
+    {
+      name: 'file_edit',
+      questionPattern: 'Accept this file edit\\??',
+      optionLinePattern: '^\\s*>?\\s*(\\d+)\\.\\s+(.*)$',
+      minOptions: 2
     }
+  ];
+
+  let promptTypes = [];
+  if (activeProfile && Array.isArray(activeProfile.promptTypes) && activeProfile.promptTypes.length > 0) {
+    promptTypes = activeProfile.promptTypes;
+  } else if (activeProfile && activeProfile.prompt) {
+    promptTypes = [
+      {
+        name: 'command',
+        contextStart: activeProfile.prompt.commandBlockStart || activeProfile.prompt.contextStart,
+        questionPattern: activeProfile.prompt.questionPattern,
+        footerPattern: activeProfile.prompt.footerPrefix || activeProfile.prompt.footerPattern,
+        optionLinePattern: activeProfile.prompt.optionLinePattern,
+        minOptions: activeProfile.prompt.minOptions
+      }
+    ];
+  } else {
+    promptTypes = defaultPromptTypes;
   }
-  if (reqIndex === -1) return null;
 
-  // 2. Locate question line (e.g. "Run this command?") after command block start
-  let qIndex = -1;
-  for (let i = reqIndex + 1; i < screenLines.length; i++) {
-    if (screenLines[i] && questionRegex.test(screenLines[i].text)) {
-      qIndex = i;
-      break;
+  let matchedConfiguredQuestion = false;
+
+  // Try each configured prompt type in order
+  for (const pt of promptTypes) {
+    const rawQPattern = pt.questionPattern || pt.question;
+    if (!rawQPattern) continue;
+
+    // Allow the question to end with optional "?"
+    const baseQPattern = rawQPattern.replace(/(?:\\\\\?|\\\?|\?)+$/, '');
+    const qPatternStr = baseQPattern + '\\??';
+    const questionRegex = new RegExp(qPatternStr, 'i');
+
+    const contextStartPattern = pt.contextStart || pt.contextStartPattern || pt.contextStartLine || pt.contextBlockStart || pt.commandBlockStart;
+    const optionRegex = new RegExp(pt.optionLinePattern || pt.optionPattern || '^\\s*>?\\s*(\\d+)\\.\\s+(.*)$');
+    const footerPrefix = pt.footerPattern || pt.footerPrefix;
+    const minOptions = pt.minOptions !== undefined ? pt.minOptions : 2;
+
+    // Locate question line
+    let qIndex = -1;
+    let reqIndex = -1;
+
+    if (contextStartPattern) {
+      const csRegex = new RegExp(contextStartPattern, 'i');
+      for (let i = lineTexts.length - 1; i >= 0; i--) {
+        if (csRegex.test(lineTexts[i])) {
+          reqIndex = i;
+          break;
+        }
+      }
+      if (reqIndex === -1) {
+        continue;
+      }
+      for (let i = reqIndex; i < lineTexts.length; i++) {
+        if (questionRegex.test(lineTexts[i])) {
+          qIndex = i;
+          break;
+        }
+      }
+      if (qIndex === -1) {
+        continue;
+      }
+    } else {
+      for (let i = lineTexts.length - 1; i >= 0; i--) {
+        if (questionRegex.test(lineTexts[i].trim())) {
+          qIndex = i;
+          break;
+        }
+      }
+      if (qIndex === -1) {
+        continue;
+      }
     }
-  }
-  if (qIndex === -1) return null;
 
-  // 3. Command field: lines between command block start and question
-  const rawCmdLines = screenLines.slice(reqIndex + 1, qIndex);
-  const cmdLineTexts = rawCmdLines
-    .map(l => (l && l.text ? l.text.trimEnd() : ''))
-    .filter(t => t.trim() !== '');
+    // A configured question was found on screen!
+    matchedConfiguredQuestion = true;
 
-  // "Command (spaced):" joins wrapped lines with a single space
-  const commandSpaced = cmdLineTexts
-    .map(t => t.trim())
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  // "Command (compact):" joins them with all whitespace removed
-  const commandCompact = cmdLineTexts
-    .map(t => t.replace(/\s+/g, ''))
-    .join('');
-
-  const question = screenLines[qIndex].text.trimEnd().trim();
-
-  // 4. Option parsing:
-  // An option starts at a line matching optionRegex (number and text).
-  // Following lines belong to that option until next option or footer.
-  const rawOptions = [];
-  let currentOption = null;
-  let footerSeen = false;
-
-  for (let i = qIndex + 1; i < screenLines.length; i++) {
-    const lineObj = screenLines[i];
-    if (!lineObj) continue;
-    const lineText = lineObj.text.trimEnd();
-    const trimmed = lineText.trim();
-
-    // Check footer prefix: e.g. "↑/↓ Navigate" or regex
-    if (
-      trimmed.startsWith(footerPrefix) ||
-      (footerPrefix.includes('Navigate') && /^[↑^]\/[↓v]?\s*Navigate/i.test(trimmed)) ||
-      /^(?:[↑^]\/[↓v]?\s*Navigate|navigate\b|use\s+arrow\s+keys|press\s+enter|esc\s+to\s+cancel|tab\s+amend|ctrl\+[a-z]\s+edit)/i.test(trimmed)
-    ) {
-      footerSeen = true;
-      break;
+    // Capture context lines above question (up to 20 lines, stopping at previous separator line)
+    const contextLines = [];
+    const minLine = Math.max(0, qIndex - 20);
+    for (let j = qIndex - 1; j >= minLine; j--) {
+      const l = lineTexts[j];
+      if (isSeparatorLine(l)) {
+        break;
+      }
+      contextLines.unshift(l);
     }
 
-    if (trimmed.startsWith('esc to cancel')) {
+    // Command lines (for command type with context start)
+    let commandSpaced = '';
+    let commandCompact = '';
+    if (reqIndex !== -1) {
+      const rawCmdLines = lineTexts.slice(reqIndex + 1, qIndex);
+      const qLine = lineTexts[qIndex];
+      const match = qLine.match(questionRegex);
+      if (match && match.index > 0) {
+        rawCmdLines.push(qLine.slice(0, match.index));
+      }
+
+      const cmdLineTexts = rawCmdLines
+        .map(l => (typeof l === 'string' ? l.trimEnd() : ''))
+        .filter(t => t.trim() !== '');
+      commandSpaced = cmdLineTexts
+        .map(t => t.trim())
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      commandCompact = cmdLineTexts
+        .map(t => t.replace(/\s+/g, ''))
+        .join('');
+    }
+
+    const qLine = lineTexts[qIndex];
+    const match = qLine.match(questionRegex);
+    const question = match ? qLine.slice(match.index).trim() : qLine.trim();
+
+    // Option parsing
+    const rawOptions = [];
+    let currentOption = null;
+    let footerSeen = false;
+
+    for (let i = qIndex + 1; i < lineTexts.length; i++) {
+      const lineText = lineTexts[i].trimEnd();
+      const trimmed = lineText.trim();
+
+      if (footerPrefix) {
+        if (
+          trimmed.startsWith(footerPrefix) ||
+          new RegExp(footerPrefix, 'i').test(trimmed) ||
+          (footerPrefix.includes('Navigate') && /^[↑^]\/[↓v]?\s*Navigate/i.test(trimmed)) ||
+          /^(?:[↑^]\/[↓v]?\s*Navigate|navigate\b|use\s+arrow\s+keys|press\s+enter|esc\s+to\s+cancel|tab\s+amend|ctrl\+[a-z]\s+edit)/i.test(trimmed)
+        ) {
+          footerSeen = true;
+          break;
+        }
+      } else {
+        if (/^(?:[↑^]\/[↓v]?\s*Navigate|navigate\b|use\s+arrow\s+keys|press\s+enter|esc\s+to\s+cancel)/i.test(trimmed)) {
+          footerSeen = true;
+          break;
+        }
+        if (isSeparatorLine(trimmed)) {
+          break;
+        }
+      }
+
+      if (trimmed.startsWith('esc to cancel')) {
+        continue;
+      }
+
+      const match = lineText.match(optionRegex);
+      if (match) {
+        const key = match[1];
+        const num = parseInt(key, 10);
+        const optText = match[2] ? match[2].trim() : '';
+        currentOption = { key, number: num, text: optText };
+        rawOptions.push(currentOption);
+      } else if (currentOption) {
+        if (trimmed === '') {
+          continue;
+        }
+        currentOption.text += ' ' + trimmed;
+      }
+    }
+
+    // If footer pattern is configured, footerSeen must be true
+    if (footerPrefix && !footerSeen) {
       continue;
     }
 
-    const match = lineText.match(optionRegex);
-    if (match) {
-      const key = match[1];
-      const num = parseInt(key, 10);
-      const optText = match[2] ? match[2].trim() : '';
-      currentOption = { key, number: num, text: optText };
-      rawOptions.push(currentOption);
-    } else if (currentOption) {
-      if (trimmed === '') {
-        continue;
-      }
-      currentOption.text += ' ' + trimmed;
+    // Must have at least minOptions
+    if (rawOptions.length < minOptions) {
+      continue;
     }
+
+    // Consecutive numbering normalization
+    let isStrictConsecutive = true;
+    for (let idx = 0; idx < rawOptions.length; idx++) {
+      if (rawOptions[idx].number !== idx + 1) {
+        isStrictConsecutive = false;
+        break;
+      }
+    }
+    if (!isStrictConsecutive) {
+      for (let idx = 0; idx < rawOptions.length; idx++) {
+        if (isNaN(rawOptions[idx].number)) {
+          rawOptions[idx].number = idx + 1;
+          rawOptions[idx].key = String(idx + 1);
+        }
+      }
+    }
+
+    // Classify options
+    const options = rawOptions.map(o => {
+      const cleanedText = o.text.replace(/\s+/g, ' ').trim();
+      const classification = classifyOption(cleanedText, activeProfile);
+      return {
+        key: o.key || String(o.number),
+        number: o.number,
+        text: cleanedText,
+        classification
+      };
+    });
+
+    const promptTypeName = pt.name || 'command';
+
+    if (promptTypeName === 'file_edit') {
+      const targetFile = extractTargetFilePath(contextLines);
+      const fileName = targetFile ? path.basename(targetFile.replace(/\\/g, '/')) : null;
+      return {
+        promptType: 'file_edit',
+        targetFile: targetFile || '',
+        fileName: fileName || '',
+        command: targetFile || '',
+        commandSpaced: targetFile || '',
+        commandCompact: targetFile ? targetFile.replace(/\s+/g, '') : '',
+        question,
+        options,
+        contextLines,
+        footerSeen: true
+      };
+    }
+
+    return {
+      promptType: promptTypeName,
+      command: commandSpaced,
+      commandSpaced,
+      commandCompact,
+      question,
+      options,
+      contextLines,
+      footerSeen: true
+    };
   }
 
-  // Only complete if footer line was seen and at least minOptions exist
-  if (!footerSeen || rawOptions.length < minOptions) {
+  // If a configured prompt type question was present but prompt was incomplete, do NOT treat as unknown
+  if (matchedConfiguredQuestion) {
     return null;
   }
 
-  // Ensure consecutive option numbering 1..N or normalize
-  let isStrictConsecutive = true;
-  for (let idx = 0; idx < rawOptions.length; idx++) {
-    if (rawOptions[idx].number !== idx + 1) {
-      isStrictConsecutive = false;
-      break;
-    }
-  }
-  if (!isStrictConsecutive) {
-    for (let idx = 0; idx < rawOptions.length; idx++) {
-      if (isNaN(rawOptions[idx].number)) {
-        rawOptions[idx].number = idx + 1;
-        rawOptions[idx].key = String(idx + 1);
+  // Check for unknown prompts (Requirement 5):
+  // Question line ending with '?' followed by at least 2 numbered options
+  for (let i = lineTexts.length - 1; i >= 0; i--) {
+    const trimmed = lineTexts[i].trim();
+    if (trimmed.length >= 3 && trimmed.endsWith('?') && !isSeparatorLine(trimmed)) {
+      const unkOptions = [];
+      let curOpt = null;
+      for (let j = i + 1; j < lineTexts.length; j++) {
+        const lText = lineTexts[j].trimEnd();
+        const tr = lText.trim();
+        if (isSeparatorLine(tr)) break;
+        const optM = lText.match(/^\s*>?\s*(\d+)\.\s+(.*)$/);
+        if (optM) {
+          curOpt = { key: optM[1], number: parseInt(optM[1], 10), text: optM[2].trim() };
+          unkOptions.push(curOpt);
+        } else if (curOpt) {
+          if (tr === '') break;
+          curOpt.text += ' ' + tr;
+        }
+      }
+
+      if (unkOptions.length >= 2) {
+        // Capture up to 10 context lines above question (stopping at separator line)
+        const contextLines = [];
+        for (let j = i - 1; j >= Math.max(0, i - 10); j--) {
+          if (isSeparatorLine(lineTexts[j])) break;
+          contextLines.unshift(lineTexts[j]);
+        }
+        const options = unkOptions.map(o => {
+          const cleanedText = o.text.replace(/\s+/g, ' ').trim();
+          return {
+            key: o.key || String(o.number),
+            number: o.number,
+            text: cleanedText,
+            classification: classifyOption(cleanedText, activeProfile)
+          };
+        });
+
+        return {
+          promptType: 'unrecognized',
+          label: 'unrecognized prompt',
+          question: trimmed,
+          options,
+          contextLines,
+          footerSeen: true,
+          command: '',
+          commandSpaced: '',
+          commandCompact: ''
+        };
       }
     }
   }
 
-  // Classify each option using profile rules
-  const options = rawOptions.map(o => {
-    const cleanedText = o.text.replace(/\s+/g, ' ').trim();
-    const classification = classifyOption(cleanedText, activeProfile);
-    return {
-      key: o.key || String(o.number),
-      number: o.number,
-      text: cleanedText,
-      classification
-    };
-  });
-
-  return {
-    command: commandSpaced,
-    commandSpaced,
-    commandCompact,
-    question,
-    options,
-    footerSeen: true
-  };
+  return null;
 }
 
 /**
@@ -158,8 +429,9 @@ function extractPromptFromScreen(screenLines, profile) {
 function getSelectedOptionNumberFromScreen(screenLines) {
   if (!screenLines || screenLines.length === 0) return 1;
   for (const lineObj of screenLines) {
-    if (!lineObj || !lineObj.text) continue;
-    const match = lineObj.text.match(/^\s*>\s*(\d+)\./);
+    const text = typeof lineObj === 'string' ? lineObj : (lineObj && lineObj.text ? lineObj.text : '');
+    if (!text) continue;
+    const match = text.match(/^\s*>\s*(\d+)\./);
     if (match) {
       return parseInt(match[1], 10);
     }
@@ -169,5 +441,8 @@ function getSelectedOptionNumberFromScreen(screenLines) {
 
 module.exports = {
   extractPromptFromScreen,
-  getSelectedOptionNumberFromScreen
+  getSelectedOptionNumberFromScreen,
+  isSeparatorLine,
+  extractTargetFilePath,
+  appendUnknownPromptSample
 };

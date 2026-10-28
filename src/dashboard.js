@@ -100,6 +100,13 @@ function getSessionSummary(session) {
     if (session.prompt && session.prompt.decision && session.prompt.decision.startsWith('DANGER:')) {
       return session.prompt.decision;
     }
+    if (session.prompt && (session.prompt.type === 'unrecognized' || session.prompt.label === 'unrecognized prompt')) {
+      return 'unrecognized prompt';
+    }
+    if (session.prompt && (session.prompt.type === 'file_edit' || session.prompt.type === 'file edit')) {
+      const fn = session.prompt.fileName || (session.prompt.targetFile ? path.basename(session.prompt.targetFile.replace(/\\/g, '/')) : '');
+      return fn ? `file edit: ${fn}` : 'file edit';
+    }
     return (session.prompt && session.prompt.question) || 'Permission requested';
   }
   const bgCount = session.backgroundTasks || session.backgroundTaskCount || 0;
@@ -193,11 +200,20 @@ function renderDashboardLines(options = {}) {
 
       // Second line for ASKING or COUNTDOWN state: masked command and dry-run decision
       if (isPromptActive && session.prompt) {
-        const cmd = session.prompt.command || 'unknown command';
+        let typeLabel = 'command';
+        let targetText = session.prompt.command || 'unknown command';
+        const pType = session.prompt.type || 'command';
+        if (pType === 'file_edit' || pType === 'file edit') {
+          typeLabel = 'file edit';
+          targetText = session.prompt.fileName || (session.prompt.targetFile ? path.basename(session.prompt.targetFile.replace(/\\/g, '/')) : (session.prompt.command || 'file'));
+        } else if (pType === 'unrecognized' || session.prompt.label === 'unrecognized prompt') {
+          typeLabel = 'unrecognized';
+          targetText = session.prompt.label || 'unrecognized prompt';
+        }
         const decision = session.prompt.decision || 'needs you';
         const line2 = useColor
-          ? `      ↳ \x1b[1;37m${cmd}\x1b[0m \x1b[33m(${decision})\x1b[0m`
-          : `      ↳ ${cmd} (${decision})`;
+          ? `      ↳ \x1b[90m[${typeLabel}]\x1b[0m \x1b[1;37m${targetText}\x1b[0m \x1b[33m(${decision})\x1b[0m`
+          : `      ↳ [${typeLabel}] ${targetText} (${decision})`;
         lines.push(line2);
       }
     });

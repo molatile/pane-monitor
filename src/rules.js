@@ -227,7 +227,14 @@ const DEFAULT_RULES = {
       enabled: false
     }
   ],
-  optionRules: []
+  optionRules: [
+    {
+      name: 'accept-file-edit',
+      startsWith: 'Yes, accept',
+      promptTypes: ['file_edit'],
+      enabled: false
+    }
+  ]
 };
 
 /**
@@ -247,7 +254,7 @@ function validateOptionRules(rawList) {
     return (DEFAULT_RULES.optionRules || []).slice();
   }
 
-  const ALLOWED_OPTION_RULE_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist']);
+  const ALLOWED_OPTION_RULE_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist', 'promptTypes']);
   const validEntries = [];
 
   for (const item of rawList) {
@@ -311,17 +318,222 @@ function validateOptionRules(rawList) {
       }
     }
 
+    let promptTypes = undefined;
+    if (item.promptTypes !== undefined) {
+      if (Array.isArray(item.promptTypes)) {
+        promptTypes = item.promptTypes.map(p => String(p).trim()).filter(Boolean);
+      } else if (typeof item.promptTypes === 'string' && item.promptTypes.trim() !== '') {
+        promptTypes = [item.promptTypes.trim()];
+      } else {
+        console.warn(`agentwatch: warning: option rule promptTypes must be an array or string, ignored: ${JSON.stringify(item)}`);
+      }
+    }
+
     validEntries.push({
       name: item.name.trim(),
       startsWith: item.startsWith.trim(),
       endsWith: item.endsWith !== undefined ? item.endsWith.trim() : undefined,
       commandStartsWith: item.commandStartsWith !== undefined ? item.commandStartsWith.trim() : undefined,
+      promptTypes: promptTypes,
       enabled: item.enabled !== undefined ? Boolean(item.enabled) : true,
       allowPersist: item.allowPersist !== undefined ? Boolean(item.allowPersist) : false
     });
   }
 
   return validEntries;
+}
+
+/**
+ * Extracts target file path from context lines for file_edit prompts.
+ * Prefers lines containing: edit, file, update, write.
+ * Returns normalized path string or null.
+ */
+function extractTargetFilePath(contextLines) {
+  if (!contextLines || !Array.isArray(contextLines) || contextLines.length === 0) {
+    return null;
+  }
+
+  const fileExtRegex = /\.(?:[a-zA-Z0-9_-]{1,10})$/i;
+
+  function extractTokenFromLine(line) {
+    if (!line || typeof line !== 'string') return null;
+    const str = line.trim();
+
+    // Check diff header lines: --- a/path or +++ b/path
+    const diffMatch = str.match(/^(?:---|\+\+\+)\s+[ab][/\\]([^\s\t]+)/);
+    if (diffMatch && diffMatch[1]) {
+      const p = diffMatch[1].trim();
+      if (p !== '/dev/null') {
+        return p;
+      }
+    }
+
+    const gitDiffMatch = str.match(/^diff --git\s+[ab][/\\]([^\s\t]+)\s+[ab][/\\]([^\s\t]+)/);
+    if (gitDiffMatch && gitDiffMatch[2]) {
+      return gitDiffMatch[2].trim();
+    }
+
+    // Split into tokens by whitespace, quotes, parentheses, brackets
+    const tokens = str.split(/[\s,;]+/).map(t => t.trim()).filter(Boolean);
+    for (const rawToken of tokens) {
+      let t = rawToken.replace(/^['"`(<[]+/, '').replace(/['"`):>\]]+$/, '');
+      if (t.startsWith('a/') || t.startsWith('b/') || t.startsWith('a\\') || t.startsWith('b\\')) {
+        t = t.slice(2);
+      }
+      t = t.replace(/:+$/, '');
+      if (!t) continue;
+      if (t.includes('://')) continue; // Skip URLs
+      if (/^\d+\.\d+(?:\.\d+)?$/.test(t)) continue; // Skip numbers/versions
+      if (/^\d+\.?\d*s$/.test(t)) continue; // Skip times
+
+      // Must have file extension or start with .env
+      const base = path.basename(t.replace(/\\/g, '/'));
+      if (base.startsWith('.env') || (fileExtRegex.test(base) && base.includes('.'))) {
+        return t;
+      }
+    }
+
+    return null;
+  }
+
+  // 1. Prefer lines containing edit, file, update, write
+  const preferredRegex = /\b(?:edit|file|update|write)\b/i;
+  for (let i = contextLines.length - 1; i >= 0; i--) {
+    const line = typeof contextLines[i] === 'string' ? contextLines[i] : (contextLines[i]?.text || '');
+    if (preferredRegex.test(line)) {
+      const token = extractTokenFromLine(line);
+      if (token) return token;
+    }
+  }
+
+  // 2. Fallback: check all context lines searching bottom-up
+  for (let i = contextLines.length - 1; i >= 0; i--) {
+    const line = typeof contextLines[i] === 'string' ? contextLines[i] : (contextLines[i]?.text || '');
+    const token = extractTokenFromLine(line);
+    if (token) return token;
+  }
+
+  return null;
+}
+
+/**
+ * Checks whether a target file path resolves strictly INSIDE the startFolder.
+ * Rejects ".." traversal, absolute path outside, or symlink escapes.
+ */
+function isPathSafelyInside(targetPath, startFolder) {
+  if (!targetPath || typeof targetPath !== 'string') return false;
+  const rawPath = targetPath.trim();
+  if (!rawPath) return false;
+
+  // Reject any ".." path segment in raw path
+  const normalizedSeparators = rawPath.replace(/\\/g, '/');
+  const segments = normalizedSeparators.split('/');
+  if (segments.includes('..')) {
+    return false;
+  }
+
+  const baseFolder = path.resolve(startFolder || process.cwd());
+  const resolved = path.resolve(baseFolder, rawPath);
+  const rel = path.relative(baseFolder, resolved);
+
+  if (rel.startsWith('..') || path.isAbsolute(rel) || rel === '') {
+    return false;
+  }
+
+  if (process.platform === 'win32') {
+    if (!resolved.toLowerCase().startsWith(baseFolder.toLowerCase())) {
+      return false;
+    }
+  }
+
+  // Check symlink escape if file exists
+  try {
+    if (fs.existsSync(resolved)) {
+      const real = fs.realpathSync(resolved);
+      const realRel = path.relative(baseFolder, real);
+      if (realRel.startsWith('..') || path.isAbsolute(realRel) || realRel === '') {
+        return false;
+      }
+      if (process.platform === 'win32') {
+        if (!real.toLowerCase().startsWith(baseFolder.toLowerCase())) {
+          return false;
+        }
+      }
+    }
+  } catch (e) {
+    // Rely on resolved path check if realpathSync throws
+  }
+
+  return true;
+}
+
+/**
+ * Checks whether a target file is sensitive:
+ * .env*, settings.json, config files containing secrets, .ssh, credentials, private keys, .git internals,
+ * and any file matching the existing deny list or sensitive words.
+ */
+function isSensitiveFile(targetPath, denyList = []) {
+  if (!targetPath || typeof targetPath !== 'string') return true;
+  const norm = targetPath.replace(/\\/g, '/');
+  const baseName = path.basename(norm);
+  const lowerBase = baseName.toLowerCase();
+  const lowerNorm = norm.toLowerCase();
+
+  // 1. .env* (.env, .env.local, .env.production, etc.)
+  if (lowerBase.startsWith('.env') || /(?:^|\/)\.env(?:[.-]|$)/i.test(norm)) {
+    return true;
+  }
+
+  // 2. settings.json
+  if (lowerBase === 'settings.json') {
+    return true;
+  }
+
+  // 3. config files containing secrets, password, token, credential, private key
+  if (/(?:secret|token|password|credential|private[_-]?key)/i.test(lowerBase)) {
+    return true;
+  }
+
+  // 4. .ssh
+  if (/(?:^|\/)\.ssh(?:[\\/]|$)/i.test(norm) || lowerBase.includes('.ssh')) {
+    return true;
+  }
+
+  // 5. credentials
+  if (lowerNorm.includes('credential')) {
+    return true;
+  }
+
+  // 6. private keys (*.pem, *.key, id_rsa, id_ed25519, private key)
+  if (/\.(?:pem|key|pkcs12|pfx|p12)$/i.test(lowerBase) || /^id_(?:rsa|dsa|ecdsa|ed25519)/i.test(lowerBase) || lowerNorm.includes('private key') || lowerNorm.includes('private_key')) {
+    return true;
+  }
+
+  // 7. .git internals
+  if (/(?:^|\/)\.git(?:[\\/]|$)/i.test(norm)) {
+    return true;
+  }
+
+  // 8. Sensitive words and deny list
+  const sensitiveWords = ['secret', 'password', 'token', 'credential', 'private key', '.env', 'settings.json', '.ssh'];
+  for (const word of sensitiveWords) {
+    if (lowerNorm.includes(word)) {
+      return true;
+    }
+  }
+
+  if (Array.isArray(denyList)) {
+    for (const rule of denyList) {
+      if (typeof rule === 'string' && rule.trim()) {
+        const r = rule.trim().toLowerCase();
+        if (lowerNorm.includes(r) || lowerBase.includes(r)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -341,27 +553,54 @@ function isPersistOption(option) {
  * - If rule has commandStartsWith, spaced command must start with it
  * - Matching is case-insensitive, trims whitespace, and compares against option text only (not number prefix)
  * - If rule has endsWith, option text must end with it
+ * - If rule has promptTypes, prompt.promptType must match one of them
  */
-function matchesOptionRule(rule, option, cmdSpaced) {
+function matchesOptionRule(rule, option, cmdSpacedOrPrompt, promptObj) {
   if (!rule || rule.enabled === false) return false;
   if (!option || typeof option.text !== 'string') return false;
+
+  const prompt = (cmdSpacedOrPrompt && typeof cmdSpacedOrPrompt === 'object') ? cmdSpacedOrPrompt : promptObj;
+  const cmdSpaced = typeof cmdSpacedOrPrompt === 'string' ? cmdSpacedOrPrompt : (prompt ? (prompt.commandSpaced || prompt.command || '') : '');
 
   // "No" options are NEVER pressed
   if (option.classification === 'no' || /^(?:no\b|cancel\b|abort\b|reject\b|skip\b|exit\b|quit\b|dismiss\b|don'?t\b)/i.test((option.text || '').trim())) {
     return false;
   }
 
+  // Check promptTypes restriction (default: all types)
+  if (rule.promptTypes && Array.isArray(rule.promptTypes) && rule.promptTypes.length > 0) {
+    const currentType = (prompt && prompt.promptType) || 'command';
+    const normCurrent = String(currentType).toLowerCase().replace(/[\s_-]+/g, '');
+    const matchedType = rule.promptTypes.some(t => {
+      const normRule = String(t).toLowerCase().replace(/[\s_-]+/g, '');
+      return normRule === normCurrent;
+    });
+    if (!matchedType) {
+      return false;
+    }
+  }
+
   // If the rule has commandStartsWith, the spaced command must start with it
   if (rule.commandStartsWith) {
-    let prefix = rule.commandStartsWith.trim();
-    // Intelligent extraction if full prompt option text was pasted into commandStartsWith:
-    const extracted = prefix.match(/for commands that start with ['"]([^'"]+)['"]/i);
-    if (extracted) {
-      prefix = extracted[1];
-    }
-    const cmd = (cmdSpaced || '').trim().toLowerCase();
-    if (!cmd.startsWith(prefix.toLowerCase())) {
-      return false;
+    if (prompt && prompt.promptType === 'file_edit') {
+      let prefix = rule.commandStartsWith.trim();
+      const extracted = prefix.match(/for commands that start with ['"]([^'"]+)['"]/i);
+      if (extracted) prefix = extracted[1];
+      const target = (prompt.targetFile || cmdSpaced || '').trim().toLowerCase();
+      if (!target.startsWith(prefix.toLowerCase())) {
+        return false;
+      }
+    } else {
+      let prefix = rule.commandStartsWith.trim();
+      // Intelligent extraction if full prompt option text was pasted into commandStartsWith:
+      const extracted = prefix.match(/for commands that start with ['"]([^'"]+)['"]/i);
+      if (extracted) {
+        prefix = extracted[1];
+      }
+      const cmd = (cmdSpaced || '').trim().toLowerCase();
+      if (!cmd.startsWith(prefix.toLowerCase())) {
+        return false;
+      }
     }
   }
 
@@ -505,9 +744,20 @@ function checkDangerMatch(prompt, dangerList) {
   const list = Array.isArray(dangerList) ? dangerList : DEFAULT_DANGER_LIST;
   if (list.length === 0) return null;
 
-  const cmdSpaced = prompt.commandSpaced || prompt.command || '';
-  const cmdCompact = (prompt.commandCompact || cmdSpaced.replace(/\s+/g, '')).replace(/\s+/g, '');
+  let cmdSpaced = '';
+  let cmdCompact = '';
   const question = prompt.question || '';
+
+  if (prompt.promptType === 'file_edit') {
+    // For file_edit prompts, check danger-list words against the file path and the question only,
+    // not against the diff or code lines.
+    const targetFile = prompt.targetFile || '';
+    cmdSpaced = targetFile;
+    cmdCompact = targetFile.replace(/\s+/g, '');
+  } else {
+    cmdSpaced = prompt.commandSpaced || prompt.command || '';
+    cmdCompact = (prompt.commandCompact || cmdSpaced.replace(/\s+/g, '')).replace(/\s+/g, '');
+  }
 
   const matched = [];
   for (const entry of list) {
@@ -627,11 +877,26 @@ function checkDenyRule(rule, commandSpaced, commandCompact) {
   // Literal check on spaced form
   const lowerSpaced = commandSpaced.toLowerCase();
   const lowerRule = rule.toLowerCase();
+
+  // Anchored / whole-word matching for built-in command "format"
+  // Blocks "format c:", "format" as a command, but does not block "information", "formatted", "npm run format", or "Format-Table"
   if (lowerRule === 'format') {
-    const reg = /(?<![a-zA-Z0-9_-])format(?![a-zA-Z0-9_-])/i;
-    if (reg.test(commandSpaced)) return true;
+    const regSpaced = /(?:^\s*|[;&|`]\s*)(?:[\w.-]+[/\\])?format(?:\.exe|\.com)?(?:\s+.*|$)/i;
+    if (regSpaced.test(commandSpaced)) return true;
+    const regCompact = /(?:^|[;&|`])(?:[\w.-]+[/\\])?format(?:\.exe|\.com)?(?:[a-zA-Z]:|\s|$)/i;
+    if (commandCompact && regCompact.test(commandCompact)) return true;
     return false;
   }
+
+  // Whole-word matching for "sudo" command to avoid false positives on "pseudo", "pseudocode", "pseudorandom"
+  if (lowerRule === 'sudo') {
+    const regSpaced = /(?<![a-zA-Z0-9_-])sudo(?![a-zA-Z0-9_-])/i;
+    if (regSpaced.test(commandSpaced)) return true;
+    const regCompact = /(?:^|[;&|`])sudo(?:\s|$|[a-zA-Z0-9_-])/i;
+    if (commandCompact && regCompact.test(commandCompact)) return true;
+    return false;
+  }
+
   if (lowerSpaced.includes(lowerRule)) {
     return true;
   }
@@ -734,11 +999,189 @@ function evaluatePrompt(prompt, customRules) {
     };
   }
 
-  const cmdSpaced = prompt.commandSpaced || prompt.command || '';
-  const cmdCompact = prompt.commandCompact || cmdSpaced.replace(/\s+/g, '');
+  const promptType = prompt.promptType || 'command';
+
+  // Unknown prompts never auto-answer
+  if (promptType === 'unrecognized') {
+    return {
+      action: 'needs_user',
+      reason: 'unrecognized prompt',
+      log: 'Dry-run: needs_user (unrecognized prompt)'
+    };
+  }
+
   const isFolder = Boolean(rules.isFolderRuleSet);
   const ruleListType = isFolder ? 'folder' : 'default';
   const rulePrefix = isFolder ? 'folder rule: ' : 'rule: ';
+
+  // Handle file_edit prompt safety and evaluation
+  if (promptType === 'file_edit') {
+    const startFolder = prompt.startFolder || prompt.cwd || (customRules && customRules.cwd) || process.cwd();
+    const targetFile = prompt.targetFile || extractTargetFilePath(prompt.contextLines || []);
+    prompt.targetFile = targetFile;
+
+    // 1. Identify path
+    if (!targetFile) {
+      return {
+        action: 'needs_user',
+        ruleList: ruleListType,
+        reason: 'unidentifiable target file path',
+        log: 'Dry-run: needs_user (unidentifiable target file path)'
+      };
+    }
+
+    // 2. Safe inside folder
+    if (!isPathSafelyInside(targetFile, startFolder)) {
+      return {
+        action: 'needs_user',
+        ruleList: ruleListType,
+        reason: 'target file path resolves outside session folder',
+        log: 'Dry-run: needs_user (target file path resolves outside session folder)'
+      };
+    }
+
+    // 3. Sensitive file check
+    if (isSensitiveFile(targetFile, rules.deny)) {
+      return {
+        action: 'needs_user',
+        ruleList: ruleListType,
+        reason: `sensitive target file: ${path.basename(targetFile)}`,
+        log: `Dry-run: needs_user (sensitive target file: ${path.basename(targetFile)})`
+      };
+    }
+
+    // 4. Deny list check
+    const denyList = rules.deny || DEFAULT_RULES.deny;
+    for (const denyRule of denyList) {
+      if (checkDenyRule(denyRule, targetFile, targetFile.replace(/\s+/g, ''))) {
+        return {
+          action: 'blocked',
+          rule: denyRule,
+          ruleList: ruleListType,
+          log: `Dry-run: blocked command by deny rule "${denyRule}"`
+        };
+      }
+    }
+
+    // 5. Danger list check (path and question only)
+    const dangerList = rules.danger !== undefined ? rules.danger : DEFAULT_DANGER_LIST;
+    const dangerMatch = checkDangerMatch(prompt, dangerList);
+    if (dangerMatch && dangerMatch.level !== 'slow') {
+      const matchedText = dangerMatch.text;
+      return {
+        action: 'needs_user',
+        danger: true,
+        entry: matchedText,
+        ruleList: ruleListType,
+        reason: `DANGER: matched '${matchedText}'`,
+        log: `Dry-run: needs_user (DANGER: matched '${matchedText}')`
+      };
+    }
+
+    // 6. Choice question check
+    if (isChoiceQuestion(prompt)) {
+      return {
+        action: 'needs_user',
+        ruleList: ruleListType,
+        reason: 'choice question (no clear yes/no meaning)',
+        log: 'Dry-run: needs_user (choice question (no clear yes/no meaning))'
+      };
+    }
+
+    // 7. Option rules matching
+    const optionRules = Array.isArray(rules.optionRules) ? rules.optionRules : [];
+    const enabledOptionRules = optionRules.filter(r => r && r.enabled !== false);
+
+    if (enabledOptionRules.length > 0) {
+      const skippedRules = [];
+      let winningRule = null;
+      let candidateMatches = null;
+
+      for (const rule of enabledOptionRules) {
+        const matches = [];
+        for (const opt of prompt.options) {
+          if (matchesOptionRule(rule, opt, prompt)) {
+            matches.push(opt);
+          }
+        }
+
+        if (matches.length === 0) {
+          skippedRules.push(rule.name);
+          continue;
+        }
+
+        winningRule = rule;
+        candidateMatches = matches;
+        break;
+      }
+
+      if (winningRule) {
+        if (candidateMatches.length > 1) {
+          const reason = `multiple options matched winning rule "${winningRule.name}"`;
+          const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
+          return {
+            action: 'needs_user',
+            rule: winningRule.name,
+            winningRule: winningRule.name,
+            ruleList: ruleListType,
+            skippedRules: skippedRules.slice(),
+            reason,
+            log: `Dry-run: needs_user (${reason}${skippedInfo})`
+          };
+        }
+
+        const matchedOption = candidateMatches[0];
+
+        if (isPersistOption(matchedOption) && !winningRule.allowPersist) {
+          const reason = `persist option blocked (rule "${winningRule.name}" has allowPersist: false)`;
+          const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
+          return {
+            action: 'needs_user',
+            rule: winningRule.name,
+            winningRule: winningRule.name,
+            ruleList: ruleListType,
+            skippedRules: skippedRules.slice(),
+            reason,
+            log: `Dry-run: needs_user (${reason}${skippedInfo})`
+          };
+        }
+
+        let delay = winningRule.delay !== undefined
+          ? winningRule.delay
+          : (rules.defaultDelaySeconds || 3);
+        if (dangerMatch && dangerMatch.level === 'slow') {
+          const slowDelay = typeof dangerMatch.delay === 'number' && dangerMatch.delay > 0 ? dangerMatch.delay : 10;
+          delay = Math.max(delay, slowDelay);
+        }
+        const optionKey = matchedOption.key || String(matchedOption.number);
+        const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
+        return {
+          action: 'would_approve',
+          delay,
+          rule: winningRule.name,
+          winningRule: winningRule.name,
+          ruleList: ruleListType,
+          skippedRules: skippedRules.slice(),
+          ruleType: 'optionRule',
+          optionKey,
+          optionText: matchedOption.text,
+          matchedOption,
+          slowDanger: dangerMatch ? dangerMatch.text : undefined,
+          log: `Dry-run: would approve option ${optionKey} after ${delay}s (${rulePrefix}${winningRule.name}${skippedInfo})`
+        };
+      }
+    }
+
+    return {
+      action: 'needs_user',
+      ruleList: ruleListType,
+      reason: 'no option rule matched for file edit',
+      log: 'Dry-run: needs_user (no option rule matched for file edit)'
+    };
+  }
+
+  const cmdSpaced = prompt.commandSpaced || prompt.command || '';
+  const cmdCompact = prompt.commandCompact || cmdSpaced.replace(/\s+/g, '');
 
   // 1. Deny list ALWAYS wins (checked on both spaced and compact forms)
   const denyList = rules.deny || DEFAULT_RULES.deny;
@@ -794,7 +1237,7 @@ function evaluatePrompt(prompt, customRules) {
     for (const rule of enabledOptionRules) {
       const matches = [];
       for (const opt of prompt.options) {
-        if (matchesOptionRule(rule, opt, cmdSpaced)) {
+        if (matchesOptionRule(rule, opt, prompt)) {
           matches.push(opt);
         }
       }
@@ -988,10 +1431,13 @@ function validateAllRules(rules, options = {}) {
     if (!Array.isArray(rules.deny)) {
       errors.push('deny must be an array of pattern strings');
     } else {
-      // Must include all built-in deny rules
-      for (const builtin of DEFAULT_RULES.deny) {
-        if (!rules.deny.includes(builtin)) {
-          errors.push(`Built-in deny rule "${builtin}" cannot be removed`);
+      // Must include all built-in deny rules unless unlockBuiltinDenyRules is enabled
+      const unlockAllowed = Boolean(options && (options.unlockBuiltinDenyRules || options.allowUnlockBuiltin));
+      if (!unlockAllowed) {
+        for (const builtin of DEFAULT_RULES.deny) {
+          if (!rules.deny.includes(builtin)) {
+            errors.push(`Built-in deny rule "${builtin}" cannot be removed without enabling "Unlock built-in deny rules" in Settings. Built-in entries are locked to protect against critical or destructive operations. If the rule is too broad, it can be switched to whole-word matching or a narrow allow rule can be added for a specific command.`);
+          }
         }
       }
       for (const item of rules.deny) {
@@ -1054,7 +1500,7 @@ function validateAllRules(rules, options = {}) {
     if (!Array.isArray(rules.optionRules)) {
       errors.push('optionRules must be an array');
     } else {
-      const ALLOWED_OPTION_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist']);
+      const ALLOWED_OPTION_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist', 'promptTypes']);
       for (let i = 0; i < rules.optionRules.length; i++) {
         const item = rules.optionRules[i];
         if (!item || typeof item !== 'object' || Array.isArray(item)) {
@@ -1129,7 +1575,8 @@ function detectLoosening(oldRules, newRules) {
       Boolean(oldRule.allowPersist) !== Boolean(newRule.allowPersist)
     );
 
-    if ((isNew || isEdited) && (!newRule.commandStartsWith || newRule.commandStartsWith.trim() === '')) {
+    const hasCommandScope = !newRule.promptTypes || newRule.promptTypes.includes('command') || newRule.promptTypes.includes('run_command');
+    if ((isNew || isEdited) && hasCommandScope && (!newRule.commandStartsWith || newRule.commandStartsWith.trim() === '')) {
       items.push(`Option rule "${newRule.name}" has no command prefix restriction (applies to all commands)`);
     }
 
@@ -1182,6 +1629,15 @@ function detectLoosening(oldRules, newRules) {
     }
   }
 
+  // 6. Removing a deny rule
+  if (Array.isArray(oldRules?.deny) && Array.isArray(newRules?.deny)) {
+    for (const oldD of oldRules.deny) {
+      if (!newRules.deny.includes(oldD)) {
+        items.push(`Removed deny rule "${oldD}"`);
+      }
+    }
+  }
+
   return {
     isLooser: items.length > 0,
     items,
@@ -1194,9 +1650,11 @@ function detectLoosening(oldRules, newRules) {
  * Retains up to 10 newest timestamped backups.
  * Appends change summary to rules-changes.log.
  */
-function saveRules(newRules, customPath, { changeSummary } = {}) {
+function saveRules(newRules, customPath, options = {}) {
   const targetPath = customPath || CANONICAL_RULES_PATH;
-  const validation = validateAllRules(newRules, { strict: true });
+  const changeSummary = typeof options === 'string' ? options : (options && options.changeSummary);
+  const unlockBuiltinDenyRules = typeof options === 'object' && Boolean(options.unlockBuiltinDenyRules || options.allowUnlockBuiltin);
+  const validation = validateAllRules(newRules, { strict: true, unlockBuiltinDenyRules });
   if (!validation.valid) {
     const err = new Error(`Cannot save rules: ${validation.errors.join('; ')}`);
     err.validationErrors = validation.errors;
@@ -1257,7 +1715,7 @@ function saveRules(newRules, customPath, { changeSummary } = {}) {
     const logEntry = JSON.stringify({
       time: new Date().toISOString(),
       what: changeSummary || 'rules saved via gui',
-      who: 'gui'
+      who: (typeof options === 'object' && options.who) || 'gui'
     }) + '\n';
     fs.appendFileSync(logPath, logEntry, 'utf8');
   } catch (e) {}
@@ -1354,7 +1812,7 @@ function resetAllRules(customPath) {
  * Validates folder rules structure.
  * Global danger and deny rules can never be weakened or removed.
  */
-function validateFolderRules(rules, globalRules) {
+function validateFolderRules(rules, globalRules, options = {}) {
   const baseRules = globalRules || loadRules();
   const errors = [];
   if (!rules || typeof rules !== 'object' || Array.isArray(rules)) {
@@ -1377,7 +1835,7 @@ function validateFolderRules(rules, globalRules) {
     if (!Array.isArray(rules.optionRules)) {
       errors.push('optionRules must be an array');
     } else {
-      const ALLOWED_OPTION_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist']);
+      const ALLOWED_OPTION_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist', 'promptTypes']);
       for (let i = 0; i < rules.optionRules.length; i++) {
         const item = rules.optionRules[i];
         if (!item || typeof item !== 'object' || Array.isArray(item)) {
@@ -1415,9 +1873,12 @@ function validateFolderRules(rules, globalRules) {
       errors.push('deny must be an array');
     } else {
       const globalDeny = baseRules.deny || DEFAULT_RULES.deny;
-      for (const b of globalDeny) {
-        if (!rules.deny.includes(b)) {
-          errors.push(`Folder rules cannot remove global deny rule "${b}"`);
+      const unlockAllowed = Boolean(options && (options.unlockBuiltinDenyRules || options.allowUnlockBuiltin));
+      if (!unlockAllowed) {
+        for (const b of globalDeny) {
+          if (!rules.deny.includes(b)) {
+            errors.push(`Folder rules cannot remove global deny rule "${b}" without enabling "Unlock built-in deny rules" in Settings`);
+          }
         }
       }
       sanitized.deny = rules.deny.slice();
@@ -1648,7 +2109,9 @@ function saveFolderRules(folderKey, newRules, options = {}) {
   const targetPath = options.customPath || getFolderRulesPath(folderKey, customDir);
   const globalRules = options.globalRules || loadRules(options.globalRulesPath);
 
-  const validation = validateFolderRules(newRules, globalRules);
+  const validation = validateFolderRules(newRules, globalRules, {
+    unlockBuiltinDenyRules: Boolean(options.unlockBuiltinDenyRules || options.allowUnlockBuiltin)
+  });
   if (!validation.valid) {
     const err = new Error(`Cannot save folder rules: ${validation.errors.join('; ')}`);
     err.validationErrors = validation.errors;
@@ -1807,6 +2270,41 @@ function loadRulesForFolder(folderKey, defaultRulesPath, folderRulesDir) {
   };
 }
 
+/**
+ * Appends an entry to ~/.agentwatch/rules-changes.log.
+ */
+function logRulesChange(what, options = {}) {
+  try {
+    const logPath = options.logPath || getRulesChangesLogPath();
+    const logDir = path.dirname(logPath);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    const logEntry = JSON.stringify({
+      time: new Date().toISOString(),
+      what: String(what || 'rules change'),
+      who: options.who || 'gui',
+      ...(options.entry ? { entry: options.entry } : {}),
+      ...(options.folderKey ? { folderKey: options.folderKey } : {})
+    }) + '\n';
+    fs.appendFileSync(logPath, logEntry, 'utf8');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+const BUILTIN_DENY_PATTERNS = new Set(DEFAULT_RULES.deny.map(p => p.toLowerCase()));
+
+function isBuiltinDenyRule(pattern) {
+  if (!pattern || typeof pattern !== 'string') return false;
+  return BUILTIN_DENY_PATTERNS.has(pattern.trim().toLowerCase());
+}
+
+function getLockedDenyExplanation(pattern) {
+  return `Built-in deny rule "${pattern}" is locked to protect against critical or destructive operations. If it is too broad, the entry can be switched to whole-word matching or a narrow allow rule can be added for a specific command. To remove or edit built-in deny rules, turn on "Unlock built-in deny rules" in Settings.`;
+}
+
 module.exports = {
   loadRules,
   checkDenyRule,
@@ -1828,6 +2326,9 @@ module.exports = {
   resetDangerList,
   resetDenyList,
   resetAllRules,
+  logRulesChange,
+  isBuiltinDenyRule,
+  getLockedDenyExplanation,
   getRulesBackupsDir,
   getRulesChangesLogPath,
   getFolderRulesDir,
@@ -1849,6 +2350,10 @@ module.exports = {
   copyAncestorRules,
   loadRulesForFolder,
   resolveRulesPath,
+  extractTargetFilePath,
+  isPathSafelyInside,
+  isSensitiveFile,
+  getAgentwatchDir,
   CANONICAL_RULES_PATH,
   DEFAULT_DANGER_LIST,
   DEFAULT_RULES

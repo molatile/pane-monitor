@@ -292,6 +292,61 @@
           </div>
         </div>
       </div>
+
+      <!-- LOCKED BUILT-IN DENY EXPLANATION MODAL -->
+      <div id="locked-deny-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 class="modal-title">🔒 Built-in Deny Rule Locked</h3>
+          </div>
+          <div class="modal-body">
+            <p id="locked-deny-entry-info" style="margin-bottom: 10px;">
+              The rule <strong id="locked-deny-rule-name"></strong> is a built-in security protection.
+            </p>
+            <p style="margin-bottom: 12px; color: var(--text-secondary, #94a3b8);">
+              Built-in deny rules are locked by default to prevent accidental removal of critical protections against dangerous operations.
+            </p>
+            <div class="locked-alternatives-box" style="background: var(--card-bg, #1e293b); padding: 12px; border-radius: 6px; border: 1px solid var(--border-color, #334155); margin-bottom: 12px;">
+              <p style="margin-bottom: 6px; font-weight: 600;">Recommended alternatives:</p>
+              <ul style="padding-left: 20px; margin: 0; line-height: 1.5;">
+                <li><strong>Whole-word matching:</strong> If this rule is too broad and triggers on normal commands, the entry can be switched to whole-word matching.</li>
+                <li><strong>Narrow allow rule:</strong> You can add a narrow allow rule in the Command Allow List for a specific command invocation.</li>
+              </ul>
+            </div>
+            <p id="locked-deny-hint" style="font-size: 12px; color: var(--text-muted, #64748b);">
+              To remove or edit built-in deny rules, turn on <strong>"Unlock built-in deny rules"</strong> in Settings.
+            </p>
+          </div>
+          <div class="modal-footer">
+            <button id="locked-deny-close-btn" class="btn btn-primary" type="button">Understood</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- UNLOCK BUILT-IN DENY CONFIRMATION MODAL -->
+      <div id="unlock-deny-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 class="modal-title">⚠️ Unlock Built-in Deny Rule</h3>
+          </div>
+          <div class="modal-body">
+            <p class="unlock-deny-warning" style="color: var(--color-danger, #ef4444); margin-bottom: 12px;">
+              <strong>Warning:</strong> Removing or modifying a built-in deny rule weakens default safety protections.
+            </p>
+            <p>Entry being removed: <strong id="unlock-deny-entry-name"></strong></p>
+            <div class="unlock-confirm-box" style="margin-top: 14px;">
+              <label for="unlock-deny-input" class="form-label" style="display: block; margin-bottom: 6px;">
+                To confirm removing this built-in deny rule, type <strong>UNLOCK</strong> below:
+              </label>
+              <input type="text" id="unlock-deny-input" class="form-input" placeholder="Type UNLOCK to confirm" autocomplete="off">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button id="unlock-deny-confirm-btn" class="btn btn-danger" type="button" disabled>Remove Rule</button>
+            <button id="unlock-deny-cancel-btn" class="btn btn-secondary" type="button">Cancel</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- SETTINGS TAB VIEW -->
@@ -327,6 +382,14 @@
             <div class="setting-text">
               <span class="setting-label">Allow turning auto-accept on from the window</span>
               <span class="setting-desc">Allow enabling auto-accept for running sessions from agent rows</span>
+            </div>
+          </label>
+
+          <label class="setting-item">
+            <input type="checkbox" id="setting-unlock-builtin-deny">
+            <div class="setting-text">
+              <span class="setting-label">Unlock built-in deny rules</span>
+              <span class="setting-desc">Allow removing or editing built-in deny rules (requires typing UNLOCK)</span>
             </div>
           </label>
 

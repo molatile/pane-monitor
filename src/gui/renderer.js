@@ -55,6 +55,7 @@ const settingAutoOpen = getEl('setting-auto-open');
 const settingAutoPaused = getEl('setting-auto-paused');
 const settingAutoAcceptDefault = getEl('setting-auto-accept-default');
 const settingAllowTurnOn = getEl('setting-allow-turn-on');
+const settingUnlockBuiltinDeny = getEl('setting-unlock-builtin-deny');
 const settingPinTop = getEl('setting-pin-top');
 const settingNotifications = getEl('setting-notifications');
 const settingTimeFormat = getEl('setting-time-format');
@@ -838,9 +839,18 @@ function createRow(session) {
   const promptEl = document.createElement('div');
   promptEl.className = 'session-prompt-line';
   if (isPromptActive && session.prompt) {
-    const cmdText = session.prompt.command || 'unknown command';
+    let typeLabel = 'command';
+    let targetText = session.prompt.command || 'unknown command';
+    const pType = session.prompt.type || 'command';
+    if (pType === 'file_edit' || pType === 'file edit') {
+      typeLabel = 'file edit';
+      targetText = session.prompt.fileName || (session.prompt.targetFile ? session.prompt.targetFile.split(/[/\\]/).pop() : (session.prompt.command || 'file'));
+    } else if (pType === 'unrecognized' || session.prompt.label === 'unrecognized prompt') {
+      typeLabel = 'unrecognized';
+      targetText = session.prompt.label || 'unrecognized prompt';
+    }
     const decisionText = session.prompt.decision || 'needs you';
-    promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-cmd">${escapeHtml(cmdText)}</span> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
+    promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-type-tag">[${escapeHtml(typeLabel)}]</span> <span class="prompt-cmd">${escapeHtml(targetText)}</span> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
     promptEl.style.display = '';
   } else {
     promptEl.innerHTML = '';
@@ -967,9 +977,18 @@ function updateRow(entry, session) {
 
   // ASKING / COUNTDOWN prompt line
   if (isPromptActive && session.prompt) {
-    const cmdText = session.prompt.command || 'unknown command';
+    let typeLabel = 'command';
+    let targetText = session.prompt.command || 'unknown command';
+    const pType = session.prompt.type || 'command';
+    if (pType === 'file_edit' || pType === 'file edit') {
+      typeLabel = 'file edit';
+      targetText = session.prompt.fileName || (session.prompt.targetFile ? session.prompt.targetFile.split(/[/\\]/).pop() : (session.prompt.command || 'file'));
+    } else if (pType === 'unrecognized' || session.prompt.label === 'unrecognized prompt') {
+      typeLabel = 'unrecognized';
+      targetText = session.prompt.label || 'unrecognized prompt';
+    }
     const decisionText = session.prompt.decision || 'needs you';
-    entry.promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-cmd">${escapeHtml(cmdText)}</span> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
+    entry.promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-type-tag">[${escapeHtml(typeLabel)}]</span> <span class="prompt-cmd">${escapeHtml(targetText)}</span> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
     entry.promptEl.style.display = '';
   } else {
     entry.promptEl.innerHTML = '';
@@ -1585,6 +1604,9 @@ function updateSettingsTab() {
   if (settingAllowTurnOn && document.activeElement !== settingAllowTurnOn) {
     settingAllowTurnOn.checked = Boolean(currentConfig.allowTurnOnFromWindow);
   }
+  if (settingUnlockBuiltinDeny && document.activeElement !== settingUnlockBuiltinDeny) {
+    settingUnlockBuiltinDeny.checked = Boolean(currentConfig.unlockBuiltinDenyRules);
+  }
   if (settingTimeFormat && document.activeElement !== settingTimeFormat) {
     settingTimeFormat.value = currentConfig.timeFormat || '24-hour';
   }
@@ -1696,7 +1718,7 @@ if (settingAutoOpen) {
   settingAutoOpen.addEventListener('change', (e) => {
     const val = e.target.checked;
     currentConfig.autoOpenWindow = val;
-    if (window.agentwatch && window.agentwatch.setSetting) {
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
       Promise.resolve(window.agentwatch.setSetting('autoOpenWindow', val)).then((res) => {
         if (!res || res.success) showToast('Saved');
         else {
@@ -1727,7 +1749,7 @@ if (settingNotifications) {
   settingNotifications.addEventListener('change', (e) => {
     const val = e.target.checked;
     currentConfig.notifications = val;
-    if (window.agentwatch && window.agentwatch.setSetting) {
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
       Promise.resolve(window.agentwatch.setSetting('notifications', val)).then((res) => {
         if (!res || res.success) showToast('Saved');
         else {
@@ -1750,7 +1772,7 @@ if (pauseCheckbox) {
     const val = e.target.checked;
     currentConfig.autoPaused = val;
     if (settingAutoPaused) settingAutoPaused.checked = val;
-    if (window.agentwatch && window.agentwatch.setSetting) {
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
       Promise.resolve(window.agentwatch.setSetting('autoPaused', val)).then((res) => {
         if (!res || res.success) showToast('Saved');
         else {
@@ -1774,7 +1796,7 @@ if (settingAutoPaused) {
     const val = e.target.checked;
     currentConfig.autoPaused = val;
     if (pauseCheckbox) pauseCheckbox.checked = val;
-    if (window.agentwatch && window.agentwatch.setSetting) {
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
       Promise.resolve(window.agentwatch.setSetting('autoPaused', val)).then((res) => {
         if (!res || res.success) showToast('Saved');
         else {
@@ -1797,7 +1819,7 @@ if (settingTimeFormat) {
   settingTimeFormat.addEventListener('change', (e) => {
     const val = e.target.value;
     currentConfig.timeFormat = val;
-    if (window.agentwatch && window.agentwatch.setSetting) {
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
       Promise.resolve(window.agentwatch.setSetting('timeFormat', val)).then((res) => {
         if (!res || res.success) showToast('Saved');
         else showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
@@ -1817,7 +1839,7 @@ if (settingAutoAcceptDefault) {
   settingAutoAcceptDefault.addEventListener('change', (e) => {
     const val = e.target.checked;
     currentConfig.autoAcceptDefault = val;
-    if (window.agentwatch && window.agentwatch.setSetting) {
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
       Promise.resolve(window.agentwatch.setSetting('autoAcceptDefault', val)).then((res) => {
         if (!res || res.success) {
           showToast('Saved');
@@ -1839,7 +1861,7 @@ if (settingAllowTurnOn) {
   settingAllowTurnOn.addEventListener('change', (e) => {
     const val = e.target.checked;
     currentConfig.allowTurnOnFromWindow = val;
-    if (window.agentwatch && window.agentwatch.setSetting) {
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
       Promise.resolve(window.agentwatch.setSetting('allowTurnOnFromWindow', val)).then((res) => {
         if (!res || res.success) {
           showToast('Saved');
@@ -1861,6 +1883,29 @@ if (settingAllowTurnOn) {
         if (entry) updateRow(entry, session);
       });
     }
+  });
+}
+
+if (settingUnlockBuiltinDeny) {
+  settingUnlockBuiltinDeny.addEventListener('change', (e) => {
+    const val = e.target.checked;
+    currentConfig.unlockBuiltinDenyRules = val;
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
+      Promise.resolve(window.agentwatch.setSetting('unlockBuiltinDenyRules', val)).then((res) => {
+        if (!res || res.success) {
+          showToast('Saved');
+        } else {
+          currentConfig.unlockBuiltinDenyRules = !val;
+          settingUnlockBuiltinDeny.checked = !val;
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+        }
+      }).catch((err) => {
+        currentConfig.unlockBuiltinDenyRules = !val;
+        settingUnlockBuiltinDeny.checked = !val;
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
+    }
+    renderDenyList();
   });
 }
 
@@ -1891,7 +1936,7 @@ if (settingLogDirBrowseBtn) {
 
 if (settingLogDirDefaultBtn) {
   settingLogDirDefaultBtn.addEventListener('click', async () => {
-    if (window.agentwatch && window.agentwatch.setSetting) {
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
       try {
         const res = await window.agentwatch.setSetting('logDir', '');
         if (res && res.success) {
@@ -2056,6 +2101,17 @@ const denyListContainer = getEl('deny-list-container');
 const newDenyPattern = getEl('new-deny-pattern');
 const addDenyBtn = getEl('add-deny-btn');
 
+// Locked & Unlock Deny Modal Elements
+const lockedDenyModal = getEl('locked-deny-modal');
+const lockedDenyRuleName = getEl('locked-deny-rule-name');
+const lockedDenyCloseBtn = getEl('locked-deny-close-btn');
+
+const unlockDenyModal = getEl('unlock-deny-modal');
+const unlockDenyEntryName = getEl('unlock-deny-entry-name');
+const unlockDenyInput = getEl('unlock-deny-input');
+const unlockDenyConfirmBtn = getEl('unlock-deny-confirm-btn');
+const unlockDenyCancelBtn = getEl('unlock-deny-cancel-btn');
+
 // Allow List Elements
 const tier1AllowList = getEl('tier1-allow-list');
 const tier2AllowList = getEl('tier2-allow-list');
@@ -2090,10 +2146,15 @@ function generateRulePreview(rule) {
   if (!rule) return '';
   const starts = rule.startsWith ? `starts with "${rule.startsWith}"` : 'any text';
   const ends = rule.endsWith ? ` and ends with "${rule.endsWith}"` : '';
-  const cmd = rule.commandStartsWith ? `for commands that start with "${rule.commandStartsWith}"` : 'for all commands';
+  let types = '';
+  if (rule.promptTypes && Array.isArray(rule.promptTypes) && rule.promptTypes.length > 0) {
+    const formattedTypes = rule.promptTypes.map(t => String(t).replace('_', ' ')).join(', ');
+    types = ` for ${formattedTypes} prompts`;
+  }
+  const cmd = rule.commandStartsWith ? ` for commands that start with "${rule.commandStartsWith}"` : (types ? '' : ' for all commands');
   const persist = rule.allowPersist ? ' (allows persist)' : '';
   const disabled = rule.enabled === false ? ' [Disabled]' : '';
-  return `Presses the option that ${starts}${ends} ${cmd}${persist}${disabled}.`;
+  return `Presses the option that ${starts}${ends}${types}${cmd}${persist}${disabled}.`;
 }
 
 /**
@@ -2492,6 +2553,29 @@ function renderOptionRules() {
     cmdGroup.appendChild(cmdInput);
     fieldsGrid.appendChild(cmdGroup);
 
+    // Prompt types field
+    const ptGroup = document.createElement('div');
+    ptGroup.className = 'form-group';
+    const ptLabel = document.createElement('label');
+    ptLabel.className = 'form-label';
+    ptLabel.textContent = 'Prompt types (comma-separated, default all):';
+    const ptInput = document.createElement('input');
+    ptInput.type = 'text';
+    ptInput.className = 'form-input';
+    ptInput.value = Array.isArray(rule.promptTypes) ? rule.promptTypes.join(', ') : (rule.promptTypes || '');
+    ptInput.placeholder = 'All types (default)';
+    ptInput.addEventListener('input', () => {
+      const val = ptInput.value.trim();
+      rule.promptTypes = val ? val.split(',').map(s => s.trim()).filter(Boolean) : undefined;
+      previewEl.textContent = generateRulePreview(rule);
+      const err = validateOptionRuleDraft(rule);
+      errorEl.textContent = err || '';
+      updateRulesTopBar();
+    });
+    ptGroup.appendChild(ptLabel);
+    ptGroup.appendChild(ptInput);
+    fieldsGrid.appendChild(ptGroup);
+
     // Allow persist checkbox
     const persistGroup = document.createElement('div');
     persistGroup.className = 'form-group';
@@ -2634,6 +2718,107 @@ function renderDangerList() {
   });
 }
 
+const BUILTIN_DENY_PATTERNS = new Set([
+  'rm -rf',
+  'rmdir /s',
+  'del /f',
+  'Remove-Item -Recurse',
+  'format',
+  'git push --force',
+  'git reset --hard',
+  'curl.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)',
+  'wget.*\\|.*(?:sh|bash|zsh|powershell|cmd|pwsh)',
+  'powershell -enc',
+  'sudo',
+  'chmod 777',
+  '.env',
+  'settings.json',
+  '.ssh',
+  'credentials'
+].map(s => s.toLowerCase()));
+
+function isBuiltinDenyRule(pattern) {
+  if (!pattern || typeof pattern !== 'string') return false;
+  return BUILTIN_DENY_PATTERNS.has(pattern.trim().toLowerCase());
+}
+
+function getLockedDenyExplanation(pattern) {
+  return `Built-in deny rule "${pattern}" is locked to protect against critical or destructive operations. If it is too broad, the entry can be switched to whole-word matching or a narrow allow rule can be added for a specific command. To remove or edit built-in deny rules, turn on "Unlock built-in deny rules" in Settings.`;
+}
+
+let pendingUnlockEntryIndex = -1;
+let pendingUnlockEntryPattern = '';
+
+function showLockedDenyDialog(pattern) {
+  const nameEl = lockedDenyRuleName || getEl('locked-deny-rule-name');
+  if (nameEl) nameEl.textContent = `"${pattern}"`;
+  const modalEl = lockedDenyModal || getEl('locked-deny-modal');
+  if (modalEl) {
+    modalEl.classList.remove('hidden');
+  } else if (typeof alert === 'function') {
+    alert(getLockedDenyExplanation(pattern));
+  }
+}
+
+if (lockedDenyCloseBtn && lockedDenyModal) {
+  lockedDenyCloseBtn.addEventListener('click', () => {
+    lockedDenyModal.classList.add('hidden');
+  });
+}
+
+function showUnlockConfirmationDialog(pattern, index) {
+  pendingUnlockEntryIndex = index;
+  pendingUnlockEntryPattern = pattern;
+  const nameEl = unlockDenyEntryName || getEl('unlock-deny-entry-name');
+  if (nameEl) nameEl.textContent = `"${pattern}"`;
+  const inputEl = unlockDenyInput || getEl('unlock-deny-input');
+  if (inputEl) {
+    inputEl.value = '';
+  }
+  const btnEl = unlockDenyConfirmBtn || getEl('unlock-deny-confirm-btn');
+  if (btnEl) {
+    btnEl.disabled = true;
+  }
+  const modalEl = unlockDenyModal || getEl('unlock-deny-modal');
+  if (modalEl) {
+    modalEl.classList.remove('hidden');
+    if (inputEl && typeof inputEl.focus === 'function') {
+      inputEl.focus();
+    }
+  }
+}
+
+if (unlockDenyInput && unlockDenyConfirmBtn) {
+  unlockDenyInput.addEventListener('input', () => {
+    unlockDenyConfirmBtn.disabled = (unlockDenyInput.value.trim() !== 'UNLOCK');
+  });
+}
+
+if (unlockDenyConfirmBtn) {
+  unlockDenyConfirmBtn.addEventListener('click', () => {
+    if (!unlockDenyInput || unlockDenyInput.value.trim() !== 'UNLOCK') return;
+    if (pendingUnlockEntryIndex >= 0 && workingRules && Array.isArray(workingRules.deny)) {
+      const removed = workingRules.deny.splice(pendingUnlockEntryIndex, 1)[0];
+      if (unlockDenyModal) unlockDenyModal.classList.add('hidden');
+      pendingUnlockEntryIndex = -1;
+      pendingUnlockEntryPattern = '';
+      renderDenyList();
+      updateRulesTopBar();
+      if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.logRuleChange) {
+        window.agentwatch.logRuleChange(`Removed built-in deny rule "${removed}" (unlocked)`);
+      }
+    }
+  });
+}
+
+if (unlockDenyCancelBtn && unlockDenyModal) {
+  unlockDenyCancelBtn.addEventListener('click', () => {
+    unlockDenyModal.classList.add('hidden');
+    pendingUnlockEntryIndex = -1;
+    pendingUnlockEntryPattern = '';
+  });
+}
+
 /**
  * Renders the deny list tags.
  */
@@ -2644,8 +2829,17 @@ function renderDenyList() {
   const deny = workingRules.deny || [];
 
   deny.forEach((pattern, index) => {
+    const isBuiltin = isBuiltinDenyRule(pattern);
     const tag = document.createElement('span');
-    tag.className = 'deny-tag';
+    tag.className = isBuiltin ? 'deny-tag builtin' : 'deny-tag';
+
+    if (isBuiltin) {
+      const lockIcon = document.createElement('span');
+      lockIcon.className = 'lock-badge';
+      lockIcon.textContent = '🔒';
+      lockIcon.title = currentConfig.unlockBuiltinDenyRules ? 'Built-in deny rule (unlocked in settings)' : 'Built-in deny rule (locked)';
+      tag.appendChild(lockIcon);
+    }
 
     const textSpan = document.createElement('span');
     textSpan.textContent = pattern;
@@ -2657,8 +2851,19 @@ function renderDenyList() {
     delBtn.style.padding = '1px 4px';
     delBtn.style.fontSize = '10px';
     delBtn.textContent = '✕';
-    delBtn.title = 'Remove deny entry';
+    delBtn.title = isBuiltin
+      ? (currentConfig.unlockBuiltinDenyRules ? 'Remove built-in deny entry (requires UNLOCK)' : 'Locked built-in deny entry')
+      : 'Remove deny entry';
+
     delBtn.addEventListener('click', () => {
+      if (isBuiltin) {
+        if (!currentConfig.unlockBuiltinDenyRules) {
+          showLockedDenyDialog(pattern);
+          return;
+        }
+        showUnlockConfirmationDialog(pattern, index);
+        return;
+      }
       workingRules.deny.splice(index, 1);
       renderDenyList();
       updateRulesTopBar();
@@ -3287,6 +3492,12 @@ if (typeof module !== 'undefined' && module.exports) {
     renderDangerList,
     renderDenyList,
     renderAllowList,
+    isBuiltinDenyRule,
+    getLockedDenyExplanation,
+    showLockedDenyDialog,
+    showUnlockConfirmationDialog,
+    getPendingUnlockEntryPattern: () => pendingUnlockEntryPattern,
+    getPendingUnlockEntryIndex: () => pendingUnlockEntryIndex,
     showNestedFolderBanner,
     hideNestedFolderBanner,
     refreshRulesFolderSelect,

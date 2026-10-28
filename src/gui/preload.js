@@ -54,6 +54,13 @@ contextBridge.exposeInMainWorld('agentwatch', {
   },
 
   /**
+   * Logs a rule change to rules-changes.log.
+   */
+  logRuleChange: (what) => {
+    return ipcRenderer.invoke('log-rule-change', { what });
+  },
+
+  /**
    * Opens native folder picker in main process and saves selected folder.
    * Renderer never chooses or passes a path.
    */

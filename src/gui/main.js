@@ -27,6 +27,7 @@ const {
   resetDangerList,
   detectLoosening,
   evaluatePrompt,
+  logRulesChange,
   getFolderRulesDir,
   hasFolderRules,
   loadFolderRules,
@@ -286,11 +287,20 @@ ipcMain.handle('set-always-on-top', (event, { enabled }) => {
 });
 
 // Settings tab update IPC
-  ipcMain.handle('set-setting', (event, payload) => {
-    return setSetting(payload);
-  });
+ipcMain.handle('set-setting', (event, payload) => {
+  return setSetting(payload);
+});
 
-  // Native folder picker IPC
+// Log rule change IPC
+ipcMain.handle('log-rule-change', (event, payload = {}) => {
+  const what = payload && payload.what;
+  if (what && typeof what === 'string') {
+    logRulesChange(what, { who: 'gui' });
+  }
+  return { success: true };
+});
+
+// Native folder picker IPC
   ipcMain.handle('pick-log-folder', async () => {
     return pickLogFolder();
   });
@@ -363,8 +373,14 @@ ipcMain.handle('save-rules', (event, payload = {}) => {
       };
     }
 
+    const cfg = loadConfig(configPath);
+    const unlockBuiltin = Boolean(cfg.unlockBuiltinDenyRules);
+
     // Save atomically via fixed CANONICAL_RULES_PATH
-    saveRules(newRules, CANONICAL_RULES_PATH, { changeSummary: payload.changeSummary || 'Rules saved via GUI' });
+    saveRules(newRules, CANONICAL_RULES_PATH, {
+      changeSummary: payload.changeSummary || 'Rules saved via GUI',
+      unlockBuiltinDenyRules: unlockBuiltin
+    });
 
     sendDashboardUpdate();
     return {
@@ -609,8 +625,12 @@ ipcMain.handle('save-folder-rules', (event, payload = {}) => {
       };
     }
 
+    const cfg = loadConfig(configPath);
+    const unlockBuiltin = Boolean(cfg.unlockBuiltinDenyRules);
+
     saveFolderRules(folderKey, newRules, {
-      changeSummary: payload.changeSummary || `Folder rules saved for ${folderKey}`
+      changeSummary: payload.changeSummary || `Folder rules saved for ${folderKey}`,
+      unlockBuiltinDenyRules: unlockBuiltin
     });
 
     sendDashboardUpdate();
@@ -742,6 +762,8 @@ function setSetting(payload = {}, options = {}) {
     cfg.autoAcceptDefault = Boolean(value);
   } else if (key === 'allowTurnOnFromWindow') {
     cfg.allowTurnOnFromWindow = Boolean(value);
+  } else if (key === 'unlockBuiltinDenyRules') {
+    cfg.unlockBuiltinDenyRules = Boolean(value);
   } else if (key === 'logDir' || key === 'outputDir') {
     if (!value || typeof value !== 'string' || value.trim() === '') {
       cfg.logDir = '';

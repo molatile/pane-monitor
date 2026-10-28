@@ -2,6 +2,22 @@
   "id": "agy",
   "name": "Antigravity CLI",
   "commandNames": ["agy", "antigravity"],
+  "promptTypes": [
+    {
+      "name": "command",
+      "contextStart": "Requesting permission for:",
+      "questionPattern": "Run this command\\?",
+      "footerPattern": "↑/↓ Navigate",
+      "optionLinePattern": "^\\s*>?\\s*(\\d+)\\.\\s+(.*)$",
+      "minOptions": 2
+    },
+    {
+      "name": "file_edit",
+      "questionPattern": "Accept this file edit\\?",
+      "optionLinePattern": "^\\s*>?\\s*(\\d+)\\.\\s+(.*)$",
+      "minOptions": 2
+    }
+  ],
   "prompt": {
     "commandBlockStart": "Requesting permission for:",
     "questionPattern": "Run this command\\?",

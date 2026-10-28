@@ -11,7 +11,7 @@ try {
   pty = require('@lydell/node-pty');
 }
 const { Terminal } = require('@xterm/headless');
-const { extractPromptFromScreen, getSelectedOptionNumberFromScreen } = require('./parser');
+const { extractPromptFromScreen, getSelectedOptionNumberFromScreen, appendUnknownPromptSample } = require('./parser');
 const { resolveExecutable } = require('./resolver');
 const { getProfileForCommand, getNoProfileNotice } = require('./profile');
 const {
@@ -165,6 +165,8 @@ function startAgentwatch(options = {}) {
     if (!detected) return;
 
     activePrompt.detected = detected;
+    detected.cwd = options.cwd || rawCwd;
+    detected.startFolder = options.cwd || rawCwd;
     const currentRules = loadRulesForFolder(folderKey, targetRulesPath, folderRulesDir);
     const newDecision = evaluatePrompt(detected, currentRules);
     activePrompt.decision = newDecision;
@@ -829,6 +831,8 @@ function startAgentwatch(options = {}) {
 
     // Check danger list right before sending - danger WINS over everything and cancels countdown
     const currentRules = getEffectiveRules(promptObj ? promptObj.shownTime : Date.now());
+    currentDetected.cwd = options.cwd || rawCwd;
+    currentDetected.startFolder = options.cwd || rawCwd;
     const currentDecision = evaluatePrompt(currentDetected, currentRules);
     if (currentDecision && (currentDecision.danger || (currentDecision.reason && currentDecision.reason.startsWith('DANGER:')))) {
       promptObj.decision = currentDecision;
@@ -1313,6 +1317,11 @@ function startAgentwatch(options = {}) {
     const isInputBoxVisible = stateTracker.isInputBoxOnScreen(screenLines);
 
     if (isComplete) {
+      detected.cwd = options.cwd || rawCwd;
+      detected.startFolder = options.cwd || rawCwd;
+      if (detected.promptType === 'unrecognized') {
+        appendUnknownPromptSample(detected, { unknownPromptsLogPath: options.unknownPromptsLogPath });
+      }
       const fingerprint = getPromptFingerprint(detected);
       if (!activePrompt) {
         recentlyClosedPrompt = null;
@@ -1797,5 +1806,6 @@ function logPromptRecord(detected, decision, options = {}) {
 
 module.exports = {
   startAgentwatch,
-  logPromptRecord
+  logPromptRecord,
+  appendUnknownPromptSample
 };

@@ -133,7 +133,16 @@ class SessionStatusManager {
         this.rule ||
         null;
 
+      const promptType = promptSummary.promptType || promptSummary.type || 'command';
+      const label = promptSummary.label || (promptType === 'unrecognized' ? 'unrecognized prompt' : (promptType === 'file_edit' ? 'file edit' : 'command'));
+      const targetFile = promptSummary.targetFile ? maskText(promptSummary.targetFile) : undefined;
+      const fileName = promptSummary.fileName ? maskText(promptSummary.fileName) : (promptSummary.targetFile ? maskText(path.basename(promptSummary.targetFile.replace(/\\/g, '/'))) : undefined);
+
       this.prompt = {
+        type: promptType,
+        label,
+        targetFile,
+        fileName,
         question: maskText(promptSummary.question || ''),
         command: maskText(promptSummary.commandSpaced || promptSummary.command || ''),
         decision: decisionText,

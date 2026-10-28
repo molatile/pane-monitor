@@ -301,6 +301,7 @@ console.log('\n--- Test Group 6: Real Electron Window Close & Complete Process T
     const testAppScript = path.join(tempDir, 'test-app.js');
     fs.writeFileSync(testAppScript, `
       const { app, BrowserWindow } = require('electron');
+      app.setPath('userData', ${JSON.stringify(tempDir)});
       const gotLock = app.requestSingleInstanceLock();
       if (!gotLock) {
         app.quit();

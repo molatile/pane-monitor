@@ -32,6 +32,7 @@ function loadConfig(configPath = CONFIG_PATH) {
         autoPaused: false,
         autoAcceptDefault: false,
         allowTurnOnFromWindow: false,
+        unlockBuiltinDenyRules: false,
         timeFormat: '24-hour',
         window: { width: 420, height: 360 },
         notified: {}
@@ -48,6 +49,7 @@ function loadConfig(configPath = CONFIG_PATH) {
         autoPaused: false,
         autoAcceptDefault: false,
         allowTurnOnFromWindow: false,
+        unlockBuiltinDenyRules: false,
         timeFormat: '24-hour',
         window: { width: 420, height: 360 },
         notified: {}
@@ -63,6 +65,7 @@ function loadConfig(configPath = CONFIG_PATH) {
       autoPaused: Boolean(parsed.autoPaused),
       autoAcceptDefault: Boolean(parsed.autoAcceptDefault),
       allowTurnOnFromWindow: Boolean(parsed.allowTurnOnFromWindow),
+      unlockBuiltinDenyRules: Boolean(parsed.unlockBuiltinDenyRules),
       timeFormat: (parsed.timeFormat === '12-hour' || parsed.timeFormat === '12h') ? '12-hour' : '24-hour',
       guiPid: typeof parsed.guiPid === 'number' ? parsed.guiPid : undefined,
       guiStartTime: typeof parsed.guiStartTime === 'number' ? parsed.guiStartTime : undefined,
@@ -131,6 +134,9 @@ function saveConfig(config, configPath = CONFIG_PATH) {
     }
     if (config.allowTurnOnFromWindow !== undefined) {
       sanitized.allowTurnOnFromWindow = Boolean(config.allowTurnOnFromWindow);
+    }
+    if (config.unlockBuiltinDenyRules !== undefined) {
+      sanitized.unlockBuiltinDenyRules = Boolean(config.unlockBuiltinDenyRules);
     }
     if (config.timeFormat !== undefined) {
       sanitized.timeFormat = (config.timeFormat === '12-hour' || config.timeFormat === '12h') ? '12-hour' : '24-hour';
