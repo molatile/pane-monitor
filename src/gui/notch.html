@@ -20,25 +20,46 @@
           <span id="island-agent-name" class="island-agent-name">agentwatch</span>
         </div>
 
-        <!-- Center: Badge / Countdown / Action tag -->
-        <div id="island-tag-container" class="island-tag-container">
-          <span id="island-tag" class="island-tag tag-hidden"></span>
+        <!-- Center: Pager Navigation & Tag Container -->
+        <div class="island-center">
+          <div id="island-pager" class="island-pager pager-hidden" title="Scroll mouse wheel or click arrows to switch agents">
+            <button id="pager-prev-btn" class="pager-btn" type="button" aria-label="Previous Agent">‹</button>
+            <span id="pager-counter" class="pager-counter">1/1</span>
+            <button id="pager-next-btn" class="pager-btn" type="button" aria-label="Next Agent">›</button>
+          </div>
+          <div id="island-tag-container" class="island-tag-container">
+            <span id="island-tag" class="island-tag tag-hidden"></span>
+          </div>
         </div>
 
-        <!-- Right: Status text -->
+        <!-- Right: Status text & Snooze Action -->
         <div class="island-right">
-          <span id="island-status-text" class="island-status-text">calm</span>
+          <span id="island-status-text" class="island-status-text">Ready</span>
+          <button id="island-hide-btn" class="island-quick-hide" type="button" title="Hide for now (pops back on alert or completion)">✕</button>
         </div>
       </div>
 
-      <!-- Expanded Mini-HUD on Hover / Click -->
+      <!-- Expanded Mini-HUD on Hover / Click (Proportional Dynamic Island Tray) -->
       <div id="island-expanded" class="island-expanded">
-        <div class="island-expanded-row">
-          <div class="expanded-info">
+        <div class="expanded-top-row">
+          <div class="expanded-agent-meta">
             <span id="expanded-title" class="expanded-title">Active Agent</span>
-            <span id="expanded-command" class="expanded-command"></span>
+            <span id="expanded-agent-badge" class="expanded-agent-badge">agent</span>
           </div>
-          <button id="expanded-open-btn" class="expanded-btn" tabindex="-1">Open App</button>
+          <div class="expanded-actions-top">
+            <button id="expanded-hide-btn" class="expanded-hide-btn" type="button" title="Temporarily hide until red alert or task complete">Hide for now</button>
+          </div>
+        </div>
+
+        <div class="expanded-detail-row">
+          <div class="expanded-info">
+            <div class="expanded-target-line">
+              <span id="expanded-target-icon" class="expanded-target-icon">⚡</span>
+              <span id="expanded-command" class="expanded-command">Ready for instructions</span>
+            </div>
+            <div id="expanded-subtext" class="expanded-subtext"></div>
+          </div>
+          <button id="expanded-open-btn" class="expanded-btn" tabindex="-1">Open Decision ↗</button>
         </div>
       </div>
     </div>

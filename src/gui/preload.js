@@ -21,6 +21,18 @@ contextBridge.exposeInMainWorld('agentwatch', {
   },
 
   /**
+   * Subscribes to direct jump-to-agent navigation commands.
+   */
+  onJumpToAgent: (callback) => {
+    if (typeof callback !== 'function') return;
+    const subscription = (event, data) => callback(data);
+    ipcRenderer.on('jump-to-agent', subscription);
+    return () => {
+      ipcRenderer.removeListener('jump-to-agent', subscription);
+    };
+  },
+
+  /**
    * Requests initial dashboard state.
    */
   getState: () => ipcRenderer.invoke('get-state'),

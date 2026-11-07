@@ -14,7 +14,7 @@ class SessionStateTracker {
     this.busyThresholdMs = thresholds.busyThresholdMs || 1500;
     this.idleThresholdMs = thresholds.idleThresholdMs || 3000;
 
-    const pattern = (this.profile && this.profile.inputBoxPattern) || '(?:^[›❯>\\$]|Type a message|Enter a prompt)';
+    const pattern = (this.profile && this.profile.inputBoxPattern) || '(?:^[›❯>\\$]|Type a message|Enter a prompt|What would you like|What should we do|Send a message|\\? )';
     this.inputBoxRegex = new RegExp(pattern, 'i');
 
     this.onStateChange = onStateChange || (() => {});
@@ -301,7 +301,11 @@ class SessionStateTracker {
           nextState = 'busy';
         }
       } else if (this.currentState === 'busy' && timeSinceChange >= this.idleThresholdMs && !isInputBox) {
-        nextState = 'busy';
+        if (!hasRunningTasks && timeSinceChange >= 5000) {
+          nextState = 'idle';
+        } else {
+          nextState = 'busy';
+        }
       }
     }
 

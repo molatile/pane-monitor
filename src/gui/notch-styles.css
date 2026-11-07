@@ -3,7 +3,7 @@
    ======================================================== */
 
 :root {
-  --island-bg: #000000;
+  --island-bg: #09090b;
   --island-border: rgba(255, 255, 255, 0.14);
   --island-text: #f8fafc;
   --island-text-muted: #94a3b8;
@@ -11,6 +11,8 @@
   --color-red: #ef4444;
   --color-orange: #f59e0b;
   --color-blue: #38bdf8;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 * {
@@ -25,7 +27,7 @@ html, body {
   overflow: hidden;
   background: transparent;
   user-select: none;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -35,7 +37,7 @@ html, body {
   align-items: flex-start;
   width: 100%;
   height: 100%;
-  padding: 0 6px 6px 6px;
+  padding: 0 8px 8px 8px;
   background: transparent;
 }
 
@@ -45,7 +47,7 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   background: var(--island-bg);
   border: 1px solid var(--island-border);
   border-top: none;
@@ -53,24 +55,25 @@ html, body {
   border-bottom-right-radius: 20px;
   border-top-left-radius: 4px;
   border-top-right-radius: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.8), 0 0 1px rgba(255, 255, 255, 0.15);
   cursor: pointer;
   outline: none;
   overflow: hidden;
   min-width: 160px;
   max-width: 500px;
-  height: 36px;
+  height: 38px;
 
-  /* Hanging Slide Animations */
+  /* Hanging Slide Animations & Smooth Spring Sizing */
   transform: translateY(-120%);
   opacity: 0;
   pointer-events: none;
-  transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+  transition: transform 0.34s cubic-bezier(0.16, 1, 0.3, 1),
               opacity 0.25s ease,
-              width 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-              height 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              width 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+              height 0.32s cubic-bezier(0.16, 1, 0.3, 1),
               box-shadow 0.3s ease,
-              border-color 0.3s ease;
+              border-color 0.3s ease,
+              border-radius 0.3s ease;
 }
 
 /* Auto-Show State */
@@ -80,29 +83,43 @@ html, body {
   pointer-events: auto;
 }
 
+/* Gentle Bobbing / Floating Mode for Active Green */
+.notch-island.bobbing {
+  transform: translateY(-4px);
+  animation: island-bobbing 2.6s ease-in-out infinite;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.65), 0 0 10px rgba(34, 197, 94, 0.25);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.notch-island.bobbing:hover {
+  animation: none;
+  transform: translateY(0);
+}
+
 /* Hover / Focus interaction */
 .notch-island:hover,
 .notch-island:focus-visible {
-  border-color: rgba(255, 255, 255, 0.25);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.85);
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.9);
 }
 
-/* Expanded State (Hover or Active Alert Detail) */
+/* Expanded State (Hover or Active Alert Detail) - Proportional & Spacious */
 .notch-island.expanded {
-  height: 64px;
-  border-bottom-left-radius: 22px;
-  border-bottom-right-radius: 22px;
+  height: 92px;
+  border-bottom-left-radius: 24px;
+  border-bottom-right-radius: 24px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.92), 0 0 1px rgba(255, 255, 255, 0.2);
 }
 
 /* Ambient Backglow aura around the notch */
 .island-glow {
   position: absolute;
-  top: -10px;
+  top: -12px;
   left: 0;
   right: 0;
   bottom: 0;
   pointer-events: none;
-  border-radius: 20px;
+  border-radius: 22px;
   opacity: 0;
   transition: opacity 0.35s ease, box-shadow 0.35s ease;
   z-index: 0;
@@ -132,20 +149,21 @@ html, body {
 /* Compact Content Bar */
 .island-content {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  height: 36px;
+  height: 38px;
   padding: 0 12px;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .island-left {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
@@ -166,7 +184,7 @@ html, body {
 
 .dot-green {
   background-color: var(--color-green);
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.8);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.85);
 }
 
 .dot-orange {
@@ -187,6 +205,64 @@ html, body {
   color: var(--island-text);
   letter-spacing: -0.01em;
   white-space: nowrap;
+}
+
+/* Center: Pager and Tag Container */
+.island-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Agent Pager Controls (< 1/3 >) */
+.island-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  padding: 1px 4px;
+  transition: background 0.15s ease;
+}
+
+.island-pager.pager-hidden {
+  display: none;
+}
+
+.island-pager:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.pager-btn {
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0 3px;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+
+.pager-btn:hover {
+  color: #ffffff;
+  transform: scale(1.15);
+}
+
+.pager-counter {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--island-text-muted);
+  font-family: var(--font-mono);
+  padding: 0 2px;
 }
 
 /* Tag / Countdown container */
@@ -239,28 +315,54 @@ html, body {
   white-space: nowrap;
 }
 
-/* Expanded Tray for Details */
+.island-quick-hide {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.island-quick-hide:hover {
+  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Expanded Tray for Details (2 Proportional Rows) */
 .island-expanded {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: none;
   width: 100%;
-  padding: 0 12px 8px 12px;
+  flex-direction: column;
+  padding: 0 14px 10px 14px;
+  gap: 6px;
 }
 
 .notch-island.expanded .island-expanded {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  animation: island-expand-fade 0.2s ease;
+  animation: island-expand-fade 0.22s ease-out;
 }
 
-.expanded-info {
+/* Expanded Top Row */
+.expanded-top-row {
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  max-width: 250px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 4px;
+}
+
+.expanded-agent-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .expanded-title {
@@ -271,36 +373,141 @@ html, body {
   letter-spacing: 0.04em;
 }
 
+.expanded-agent-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 14px;
+}
+
+.expanded-actions-top {
+  display: flex;
+  align-items: center;
+}
+
+.expanded-hide-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9999px;
+  color: var(--island-text-muted);
+  font-size: 9px;
+  font-weight: 500;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.expanded-hide-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Expanded Detail Row */
+.expanded-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
+}
+
+.expanded-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.expanded-target-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.expanded-target-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
 .expanded-command {
   font-size: 11px;
   font-weight: 500;
-  color: #e2e8f0;
+  color: #f1f5f9;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.expanded-subtext {
+  font-size: 10px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 18px;
+}
+
+.expanded-subtext:empty {
+  display: none;
 }
 
 .expanded-btn {
   background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 9999px;
   color: #ffffff;
   font-size: 10px;
   font-weight: 600;
-  padding: 3px 10px;
+  padding: 4px 12px;
   cursor: pointer;
   white-space: nowrap;
   outline: none;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  flex-shrink: 0;
+  transition: all 0.18s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 .expanded-btn:hover {
-  background: rgba(255, 255, 255, 0.22);
-  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.24);
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+.expanded-btn.btn-alert {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #fca5a5;
+}
+
+.expanded-btn.btn-alert:hover {
+  background: rgba(239, 68, 68, 0.45);
+  border-color: rgba(239, 68, 68, 0.8);
+  color: #ffffff;
 }
 
 /* Keyframe Animations */
+@keyframes island-bobbing {
+  0%, 100% {
+    transform: translateY(-5px);
+  }
+  50% {
+    transform: translateY(-1px);
+  }
+}
+
 @keyframes dot-heartbeat {
   0%, 100% {
     transform: scale(1);

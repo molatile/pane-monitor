@@ -435,19 +435,36 @@ ipcMain.handle('set-always-on-top', (event, { enabled }) => {
 ipcMain.handle('notch-resize', (event, { width, height } = {}) => {
   if (!notchWindow || notchWindow.isDestroyed()) return { success: false };
   const w = Math.max(160, Math.min(600, Math.round(width || 240)));
-  const h = Math.max(34, Math.min(120, Math.round(height || 44)));
+  const h = Math.max(28, Math.min(140, Math.round(height || 44)));
   recenterNotch(w, h);
   return { success: true };
 });
 
-ipcMain.handle('notch-open-app', () => {
+ipcMain.handle('notch-open-app', (event, { sessionKey, pid } = {}) => {
+  let opened = false;
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
-    return { success: true };
+    if (sessionKey) {
+      mainWindow.webContents.send('jump-to-agent', { sessionKey });
+    }
+    opened = true;
   }
-  return { success: false };
+
+  // Safely attempt to activate the console/terminal window for the agent if on Windows
+  if (pid && typeof pid === 'number' && pid > 0 && process.platform === 'win32') {
+    try {
+      const cp = require('child_process');
+      cp.exec(
+        `powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "(New-Object -ComObject WScript.Shell).AppActivate(${pid})"`,
+        { timeout: 1500, windowsHide: true },
+        () => {}
+      );
+    } catch (e) {}
+  }
+
+  return { success: opened };
 });
 
 ipcMain.handle('notch-visibility', (event, { visible } = {}) => {

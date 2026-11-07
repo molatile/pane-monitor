@@ -178,6 +178,46 @@ try {
 
 console.log('  ✓ floatingNotch config setting successfully saved and persisted');
 
+// -------------------------------------------------------------
+// Test 5: New Interaction & Dynamic Island Elements
+// -------------------------------------------------------------
+console.log('\n--- Test 5: New Dynamic Island Pager, Bobbing & Snooze Elements ---');
+assert(html.includes('id="island-pager"'), 'notch.html must have #island-pager for scrolling agents');
+assert(html.includes('id="pager-prev-btn"'), 'notch.html must have #pager-prev-btn');
+assert(html.includes('id="pager-next-btn"'), 'notch.html must have #pager-next-btn');
+assert(html.includes('id="pager-counter"'), 'notch.html must have #pager-counter');
+assert(html.includes('id="island-hide-btn"'), 'notch.html must have #island-hide-btn for quick snooze');
+assert(html.includes('id="expanded-hide-btn"'), 'notch.html must have #expanded-hide-btn in expanded tray');
+assert(html.includes('id="expanded-target-icon"'), 'notch.html must have #expanded-target-icon');
+
+assert(css.includes('.notch-island.bobbing'), 'notch-styles.css must style .notch-island.bobbing');
+assert(css.includes('island-bobbing'), 'notch-styles.css must have island-bobbing keyframe animation');
+assert(css.includes('.island-pager'), 'notch-styles.css must style .island-pager');
+assert(css.includes('.expanded-hide-btn'), 'notch-styles.css must style .expanded-hide-btn');
+
+const guiPreload = fs.readFileSync(path.join(__dirname, '../src/gui/preload.js'), 'utf8');
+assert(guiPreload.includes('onJumpToAgent:'), 'GUI preload must expose onJumpToAgent');
+assert(main.includes('jump-to-agent'), 'main.js must send jump-to-agent IPC on notch click');
+
+console.log('  ✓ Dynamic Island elements, bobbing styles, and IPC navigation routes verified');
+
+// -------------------------------------------------------------
+// Test 6: Agent Scrolling & Hide-For-Now Functions
+// -------------------------------------------------------------
+console.log('\n--- Test 6: Notch Renderer Navigation & Hide-For-Now API ---');
+const { hideForNow, isSnoozed, nextAgent, prevAgent } = require('../src/gui/notch-renderer');
+
+assert(typeof hideForNow === 'function', 'hideForNow must be an exported function');
+assert(typeof nextAgent === 'function', 'nextAgent must be an exported function');
+assert(typeof prevAgent === 'function', 'prevAgent must be an exported function');
+
+// Test snooze
+assert.strictEqual(isSnoozed(), false, 'isSnoozed must initially be false');
+hideForNow();
+assert.strictEqual(isSnoozed(), true, 'isSnoozed must be true after hideForNow()');
+
+console.log('  ✓ Agent scrolling and hide-for-now APIs verified');
+
 console.log('\n=========================================');
 console.log('All Floating Notch Overlay tests passed successfully!');
 console.log('=========================================\n');

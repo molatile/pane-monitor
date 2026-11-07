@@ -2517,6 +2517,20 @@ if (typeof window !== 'undefined' && window.agentwatch) {
   if (window.agentwatch.getState) {
     window.agentwatch.getState().then(render);
   }
+  if (window.agentwatch.onJumpToAgent) {
+    window.agentwatch.onJumpToAgent((data) => {
+      if (data && data.sessionKey) {
+        jumpToAgent(data.sessionKey);
+        if (container) {
+          const row = container.querySelector(`[data-session-key="${data.sessionKey}"]`);
+          if (row) {
+            row.classList.add('jump-highlight');
+            setTimeout(() => row.classList.remove('jump-highlight'), 2500);
+          }
+        }
+      }
+    });
+  }
 }
 
 // =============================================================

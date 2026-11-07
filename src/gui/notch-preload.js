@@ -28,10 +28,10 @@ contextBridge.exposeInMainWorld('notchApi', {
   },
 
   /**
-   * Focuses and opens the main AgentWatch window.
+   * Focuses and opens the main AgentWatch window and optionally jumps to a session/decision.
    */
-  openMainApp: () => {
-    return ipcRenderer.invoke('notch-open-app');
+  openMainApp: (details = {}) => {
+    return ipcRenderer.invoke('notch-open-app', details);
   },
 
   /**

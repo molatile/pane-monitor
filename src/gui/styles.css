@@ -2488,3 +2488,22 @@ details[open] .past-agents-summary::before {
   font-size: 12px;
   color: var(--text-primary);
 }
+
+.session-row.jump-highlight {
+  animation: jump-highlight-pulse 2.2s ease-out;
+  border-color: #38bdf8 !important;
+}
+
+@keyframes jump-highlight-pulse {
+  0% {
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.8), 0 0 20px rgba(56, 189, 248, 0.5);
+    background-color: rgba(56, 189, 248, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 1), 0 0 30px rgba(56, 189, 248, 0.7);
+    background-color: rgba(56, 189, 248, 0.18);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
