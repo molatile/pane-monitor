@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentWatch Notch Island</title>
+  <link rel="stylesheet" href="notch-styles.css">
+</head>
+<body>
+  <div id="notch-container" class="notch-container">
+    <div id="notch-island" class="notch-island" tabindex="0" role="button" aria-label="AgentWatch Notch Island">
+      <!-- Ambient Backglow -->
+      <div id="island-glow" class="island-glow glow-hidden"></div>
+
+      <!-- Compact Content Bar -->
+      <div id="island-content" class="island-content">
+        <!-- Left: Status Dot & Agent Name -->
+        <div class="island-left">
+          <span id="island-dot" class="island-dot dot-off"></span>
+          <span id="island-agent-name" class="island-agent-name">agentwatch</span>
+        </div>
+
+        <!-- Center: Badge / Countdown / Action tag -->
+        <div id="island-tag-container" class="island-tag-container">
+          <span id="island-tag" class="island-tag tag-hidden"></span>
+        </div>
+
+        <!-- Right: Status text -->
+        <div class="island-right">
+          <span id="island-status-text" class="island-status-text">calm</span>
+        </div>
+      </div>
+
+      <!-- Expanded Mini-HUD on Hover / Click -->
+      <div id="island-expanded" class="island-expanded">
+        <div class="island-expanded-row">
+          <div class="expanded-info">
+            <span id="expanded-title" class="expanded-title">Active Agent</span>
+            <span id="expanded-command" class="expanded-command"></span>
+          </div>
+          <button id="expanded-open-btn" class="expanded-btn" tabindex="-1">Open App</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="notch-renderer.js"></script>
+</body>
+</html>

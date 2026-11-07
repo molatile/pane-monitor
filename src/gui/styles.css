@@ -20,6 +20,14 @@
   --color-asking: #dc2626;
   --color-dead: #64748b;
 
+  /* Camera Notch & Traffic Light Alert Variables */
+  --notch-zone-bg: #f8fafc;
+  --notch-zone-border: #e2e8f0;
+  --notch-pill-bg: rgba(255, 255, 255, 0.95);
+  --notch-pill-border: rgba(0, 0, 0, 0.12);
+  --notch-pill-text: #0f172a;
+  --notch-hud-bg: #ffffff;
+
   /* State Row & Badge Variables (Light Theme) */
   --row-idle-bg: #f0fdf4;
   --row-idle-hover: #dcfce7;
@@ -84,6 +92,14 @@
     --color-busy: #eab308;
     --color-asking: #ef4444;
     --color-dead: #71717a;
+
+    /* Camera Notch & Traffic Light Alert Variables (Dark Theme) */
+    --notch-zone-bg: #09090b;
+    --notch-zone-border: rgba(255, 255, 255, 0.08);
+    --notch-pill-bg: rgba(24, 24, 27, 0.92);
+    --notch-pill-border: rgba(255, 255, 255, 0.14);
+    --notch-pill-text: #f4f4f5;
+    --notch-hud-bg: #18181b;
 
     /* State Row & Badge Variables (Dark Theme) */
     --row-idle-bg: #052e16;
@@ -176,6 +192,376 @@ body {
   min-height: 100vh;
 }
 
+/* ========================================================
+   CAMERA NOTCH & AMBIENT GRAPHIC ALERT (Stage 10)
+   ======================================================== */
+
+.camera-notch-zone {
+  position: sticky;
+  top: 0;
+  width: 100%;
+  height: 28px;
+  background-color: var(--notch-zone-bg);
+  border-bottom: 1px solid var(--notch-zone-border);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 30;
+  user-select: none;
+  overflow: visible;
+  transition: background-color 0.25s ease, border-color 0.25s ease;
+}
+
+.camera-notch-zone.hidden {
+  display: none !important;
+}
+
+/* Ambient Top Shade (Faint radial glow beneath webcam) */
+.ambient-top-shade {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  pointer-events: none;
+  opacity: 0.85;
+  transition: background 0.4s ease, opacity 0.4s ease;
+  z-index: 1;
+}
+
+.ambient-top-shade.shade-off {
+  background: transparent;
+  opacity: 0;
+}
+
+.ambient-top-shade.shade-asking {
+  background: radial-gradient(ellipse 70% 120% at 50% 0%, rgba(239, 68, 68, 0.35), rgba(239, 68, 68, 0.08) 55%, transparent 85%);
+  opacity: 1;
+}
+
+.ambient-top-shade.shade-countdown {
+  background: radial-gradient(ellipse 70% 120% at 50% 0%, rgba(245, 158, 11, 0.30), rgba(245, 158, 11, 0.07) 55%, transparent 85%);
+  opacity: 0.95;
+}
+
+.ambient-top-shade.shade-busy {
+  background: radial-gradient(ellipse 70% 120% at 50% 0%, rgba(234, 179, 8, 0.22), rgba(234, 179, 8, 0.05) 55%, transparent 85%);
+  opacity: 0.9;
+}
+
+.ambient-top-shade.shade-idle {
+  background: radial-gradient(ellipse 70% 120% at 50% 0%, rgba(34, 197, 94, 0.18), rgba(34, 197, 94, 0.04) 55%, transparent 85%);
+  opacity: 0.85;
+}
+
+.ambient-top-shade.shade-dead {
+  background: radial-gradient(ellipse 70% 120% at 50% 0%, rgba(100, 116, 139, 0.15), transparent 75%);
+  opacity: 0.6;
+}
+
+/* The Centered Camera Notch Pill */
+.camera-notch-pill {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 2px 12px;
+  height: 22px;
+  background: var(--notch-pill-bg);
+  border: 1px solid var(--notch-pill-border);
+  border-radius: 9999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  outline: none;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  max-width: 90vw;
+}
+
+.camera-notch-pill:hover,
+.camera-notch-pill:focus-visible {
+  transform: translateY(1px);
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.camera-notch-pill.hud-open {
+  border-color: var(--row-selected-border, #0284c7);
+  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.35);
+}
+
+/* Notch Traffic Lights container */
+.notch-traffic-lights {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Individual Traffic Pod */
+.notch-pod {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--notch-pill-text);
+  border-radius: 4px;
+  padding: 1px 4px;
+  transition: background-color 0.15s ease;
+}
+
+.notch-pod:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.notch-pod-divider {
+  width: 1px;
+  height: 10px;
+  background-color: var(--notch-pill-border);
+  opacity: 0.8;
+}
+
+/* Traffic Dots */
+.notch-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  transition: background-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.dot-off {
+  background-color: var(--text-muted, #71717a);
+  opacity: 0.5;
+}
+
+.dot-idle {
+  background-color: var(--color-idle, #22c55e);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+}
+
+.dot-busy {
+  background-color: var(--color-busy, #eab308);
+  box-shadow: 0 0 6px rgba(234, 179, 8, 0.6);
+  animation: notch-shimmer 2s infinite ease-in-out;
+}
+
+.dot-countdown {
+  background-color: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
+  animation: notch-pulse-orange 1s infinite ease-in-out;
+}
+
+.dot-asking {
+  background-color: var(--color-asking, #ef4444);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.9);
+  animation: notch-heartbeat 1.2s infinite ease-in-out;
+}
+
+.dot-dead {
+  background-color: var(--color-dead, #71717a);
+  opacity: 0.6;
+}
+
+@keyframes notch-heartbeat {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 5px rgba(239, 68, 68, 0.7);
+  }
+  50% {
+    transform: scale(1.3);
+    box-shadow: 0 0 10px 2px rgba(239, 68, 68, 0.95);
+  }
+}
+
+@keyframes notch-pulse-orange {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 4px rgba(245, 158, 11, 0.6);
+  }
+  50% {
+    transform: scale(1.2);
+    box-shadow: 0 0 8px 2px rgba(245, 158, 11, 0.9);
+  }
+}
+
+@keyframes notch-shimmer {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(0.9);
+  }
+}
+
+.notch-label,
+.notch-agent-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notch-countdown-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+  padding: 0 4px;
+  border-radius: 4px;
+  letter-spacing: -0.02em;
+}
+
+.notch-asking-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+  padding: 0 4px;
+  border-radius: 4px;
+  letter-spacing: -0.02em;
+}
+
+/* Dropdown HUD */
+.notch-dropdown-hud {
+  position: absolute;
+  top: 32px;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  background: var(--notch-hud-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  z-index: 100;
+  padding: 10px 12px;
+  backdrop-filter: blur(14px);
+  animation: notch-hud-fade-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes notch-hud-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.notch-hud-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.notch-hud-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.notch-hud-status-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.notch-hud-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.notch-hud-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--row-bg);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.notch-hud-item:hover {
+  background: var(--row-hover);
+}
+
+.notch-hud-item-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.notch-hud-item-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.notch-hud-item-preview {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 170px;
+}
+
+.notch-hud-item-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.badge-asking-hud {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+.badge-countdown-hud {
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+}
+
+.badge-busy-hud {
+  background: rgba(234, 179, 8, 0.2);
+  color: #eab308;
+}
+
+.badge-idle-hud {
+  background: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+}
+
+.badge-dead-hud {
+  background: rgba(100, 116, 139, 0.2);
+  color: #64748b;
+}
+
+.notch-hud-empty {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 12px 0;
+}
+
 .app-header {
   display: flex;
   justify-content: space-between;
@@ -184,8 +570,12 @@ body {
   background-color: var(--header-bg);
   border-bottom: 1px solid var(--border-color);
   position: sticky;
-  top: 0;
+  top: 28px;
   z-index: 10;
+}
+
+.camera-notch-zone.hidden + .app-header {
+  top: 0;
 }
 
 .header-left {

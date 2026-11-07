@@ -1,5 +1,5 @@
 const electron = require('electron');
-const { app, BrowserWindow, ipcMain, session, dialog } = (typeof electron === 'object' && electron !== null) ? electron : {};
+const { app, BrowserWindow, ipcMain, session, dialog, screen } = (typeof electron === 'object' && electron !== null) ? electron : {};
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -52,6 +52,7 @@ const sessionsDir = SESSIONS_DIR;
 const configPath = CONFIG_PATH;
 
 let mainWindow = null;
+let notchWindow = null;
 let updateInterval = null;
 let saveBoundsTimeout = null;
 
@@ -133,6 +134,12 @@ function quitAppFully() {
   if (saveBoundsTimeout) {
     clearTimeout(saveBoundsTimeout);
     saveBoundsTimeout = null;
+  }
+  if (notchWindow && !notchWindow.isDestroyed()) {
+    try {
+      notchWindow.destroy();
+    } catch (e) {}
+    notchWindow = null;
   }
   try {
     if (app && typeof app.releaseSingleInstanceLock === 'function') {
@@ -267,18 +274,107 @@ function createWindow() {
     quitAppFully();
   });
 
+  // Create floating dynamic island notch window
+  createNotchWindow();
+
   // Start periodic 1-second update
   startUpdateLoop();
 }
 
+function createNotchWindow() {
+  if (notchWindow && !notchWindow.isDestroyed()) return notchWindow;
+  if (!BrowserWindow) return null;
+
+  const primaryDisplay = (screen && typeof screen.getPrimaryDisplay === 'function')
+    ? screen.getPrimaryDisplay()
+    : { bounds: { x: 0, y: 0, width: 1920, height: 1080 } };
+
+  const initialWidth = 240;
+  const initialHeight = 44;
+  const x = Math.round(primaryDisplay.bounds.x + (primaryDisplay.bounds.width - initialWidth) / 2);
+  const y = primaryDisplay.bounds.y;
+
+  notchWindow = new BrowserWindow({
+    width: initialWidth,
+    height: initialHeight,
+    x,
+    y,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    focusable: false,
+    show: false,
+    hasShadow: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, 'notch-preload.js'),
+      webviewTag: false,
+      allowRunningInsecureContent: false
+    }
+  });
+
+  try {
+    notchWindow.setAlwaysOnTop(true, 'screen-saver');
+  } catch (e) {
+    try { notchWindow.setAlwaysOnTop(true); } catch (err) {}
+  }
+
+  // Safety rules
+  notchWindow.webContents.on('will-navigate', (event) => {
+    event.preventDefault();
+  });
+  notchWindow.webContents.setWindowOpenHandler(() => {
+    return { action: 'deny' };
+  });
+
+  notchWindow.loadFile(path.join(__dirname, 'notch.html'));
+
+  notchWindow.on('closed', () => {
+    notchWindow = null;
+  });
+
+  return notchWindow;
+}
+
+function recenterNotch(targetWidth, targetHeight) {
+  if (!notchWindow || notchWindow.isDestroyed()) return;
+  if (!screen || typeof screen.getPrimaryDisplay !== 'function') return;
+
+  try {
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const currentBounds = notchWindow.getBounds();
+    const w = typeof targetWidth === 'number' ? targetWidth : currentBounds.width;
+    const h = typeof targetHeight === 'number' ? targetHeight : currentBounds.height;
+    const x = Math.round(primaryDisplay.bounds.x + (primaryDisplay.bounds.width - w) / 2);
+    const y = primaryDisplay.bounds.y;
+    notchWindow.setBounds({ x, y, width: w, height: h });
+  } catch (e) {}
+}
+
+if (app && typeof app.whenReady === 'function') {
+  app.whenReady().then(() => {
+    if (screen && typeof screen.on === 'function') {
+      screen.on('display-metrics-changed', () => recenterNotch());
+      screen.on('display-added', () => recenterNotch());
+      screen.on('display-removed', () => recenterNotch());
+    }
+  });
+}
+
 function sendDashboardUpdate() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const hasMainWindow = mainWindow && !mainWindow.isDestroyed();
+  const hasNotchWindow = notchWindow && !notchWindow.isDestroyed();
+  if (!hasMainWindow && !hasNotchWindow) return;
 
   try {
     const data = getDashboardData({ sessionsDir, configPath });
 
     // Check notifications
-    const cfg = data.config;
+    const cfg = data.config || {};
     const notificationsAllowed = !quiet && cfg.notifications !== false;
     notificationManager.setEnabled(notificationsAllowed);
 
@@ -286,8 +382,15 @@ function sendDashboardUpdate() {
     const rawSessions = getSessionStatusList(sessionsDir);
     notificationManager.checkSessions(rawSessions, s => s.folder || s.agent);
 
-    // Send data to renderer
-    mainWindow.webContents.send('dashboard-update', data);
+    // Send data to main window renderer
+    if (hasMainWindow) {
+      mainWindow.webContents.send('dashboard-update', data);
+    }
+
+    // Send data to notch island renderer
+    if (hasNotchWindow) {
+      notchWindow.webContents.send('notch-update', data);
+    }
   } catch (e) {
     // Non-fatal error during update
   }
@@ -325,6 +428,41 @@ ipcMain.handle('set-always-on-top', (event, { enabled }) => {
   }
   const cfg = loadConfig(configPath);
   setAlwaysOnTop(cfg, Boolean(enabled), configPath);
+  return { success: true };
+});
+
+// Floating Notch Island IPC Handlers
+ipcMain.handle('notch-resize', (event, { width, height } = {}) => {
+  if (!notchWindow || notchWindow.isDestroyed()) return { success: false };
+  const w = Math.max(160, Math.min(600, Math.round(width || 240)));
+  const h = Math.max(34, Math.min(120, Math.round(height || 44)));
+  recenterNotch(w, h);
+  return { success: true };
+});
+
+ipcMain.handle('notch-open-app', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return { success: true };
+  }
+  return { success: false };
+});
+
+ipcMain.handle('notch-visibility', (event, { visible } = {}) => {
+  if (!notchWindow || notchWindow.isDestroyed()) return { success: false };
+  try {
+    if (visible) {
+      if (!notchWindow.isVisible()) {
+        notchWindow.showInactive();
+      }
+    } else {
+      if (notchWindow.isVisible()) {
+        notchWindow.hide();
+      }
+    }
+  } catch (e) {}
   return { success: true };
 });
 
@@ -818,6 +956,13 @@ function setSetting(payload = {}, options = {}) {
     cfg.allowTurnOnFromWindow = Boolean(value);
   } else if (key === 'unlockBuiltinDenyRules') {
     cfg.unlockBuiltinDenyRules = Boolean(value);
+  } else if (key === 'cameraNotch') {
+    cfg.cameraNotch = Boolean(value);
+  } else if (key === 'floatingNotch') {
+    cfg.floatingNotch = Boolean(value);
+    if (!cfg.floatingNotch && notchWindow && !notchWindow.isDestroyed()) {
+      notchWindow.hide();
+    }
   } else if (key === 'logDir' || key === 'outputDir') {
     if (!value || typeof value !== 'string' || value.trim() === '') {
       cfg.logDir = '';
@@ -1033,6 +1178,9 @@ async function pickLogFolder(options = {}) {
 
 module.exports = {
   createWindow,
+  createNotchWindow,
+  recenterNotch,
+  getNotchWindow: () => notchWindow,
   sendDashboardUpdate,
   setSessionAuto,
   setSetting,

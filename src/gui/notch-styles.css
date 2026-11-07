@@ -1,0 +1,360 @@
+/* ========================================================
+   AGENTWATCH FLOATING NOTCH ISLAND (Siri / Dynamic Island)
+   ======================================================== */
+
+:root {
+  --island-bg: #000000;
+  --island-border: rgba(255, 255, 255, 0.14);
+  --island-text: #f8fafc;
+  --island-text-muted: #94a3b8;
+  --color-green: #22c55e;
+  --color-red: #ef4444;
+  --color-orange: #f59e0b;
+  --color-blue: #38bdf8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.notch-container {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  width: 100%;
+  height: 100%;
+  padding: 0 6px 6px 6px;
+  background: transparent;
+}
+
+/* The Pitch-Black Oval / Dynamic Island Pill */
+.notch-island {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--island-bg);
+  border: 1px solid var(--island-border);
+  border-top: none;
+  border-bottom-left-radius: 20px;
+  border-bottom-right-radius: 20px;
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
+  cursor: pointer;
+  outline: none;
+  overflow: hidden;
+  min-width: 160px;
+  max-width: 500px;
+  height: 36px;
+
+  /* Hanging Slide Animations */
+  transform: translateY(-120%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.25s ease,
+              width 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              height 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.3s ease,
+              border-color 0.3s ease;
+}
+
+/* Auto-Show State */
+.notch-island.visible {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Hover / Focus interaction */
+.notch-island:hover,
+.notch-island:focus-visible {
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.85);
+}
+
+/* Expanded State (Hover or Active Alert Detail) */
+.notch-island.expanded {
+  height: 64px;
+  border-bottom-left-radius: 22px;
+  border-bottom-right-radius: 22px;
+}
+
+/* Ambient Backglow aura around the notch */
+.island-glow {
+  position: absolute;
+  top: -10px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  border-radius: 20px;
+  opacity: 0;
+  transition: opacity 0.35s ease, box-shadow 0.35s ease;
+  z-index: 0;
+}
+
+.island-glow.glow-green {
+  opacity: 0.85;
+  box-shadow: 0 0 18px 2px rgba(34, 197, 94, 0.45), inset 0 0 10px rgba(34, 197, 94, 0.2);
+}
+
+.island-glow.glow-red {
+  opacity: 1;
+  box-shadow: 0 0 24px 4px rgba(239, 68, 68, 0.65), inset 0 0 12px rgba(239, 68, 68, 0.3);
+  animation: aura-heartbeat 1.2s infinite ease-in-out;
+}
+
+.island-glow.glow-orange {
+  opacity: 0.95;
+  box-shadow: 0 0 20px 3px rgba(245, 158, 11, 0.55), inset 0 0 10px rgba(245, 158, 11, 0.25);
+  animation: aura-pulse 1s infinite ease-in-out;
+}
+
+.island-glow.glow-hidden {
+  opacity: 0;
+}
+
+/* Compact Content Bar */
+.island-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  gap: 8px;
+}
+
+.island-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+/* Glowing Status Dots */
+.island-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  transition: background-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.dot-off {
+  background-color: #64748b;
+  opacity: 0.4;
+}
+
+.dot-green {
+  background-color: var(--color-green);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.8);
+}
+
+.dot-orange {
+  background-color: var(--color-orange);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.9);
+  animation: dot-pulse-orange 1s infinite ease-in-out;
+}
+
+.dot-red {
+  background-color: var(--color-red);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 1);
+  animation: dot-heartbeat 1.2s infinite ease-in-out;
+}
+
+.island-agent-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--island-text);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+/* Tag / Countdown container */
+.island-tag-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.island-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  line-height: 14px;
+  transition: all 0.2s ease;
+}
+
+.island-tag.tag-orange {
+  background: rgba(245, 158, 11, 0.25);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.island-tag.tag-red {
+  background: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+}
+
+.island-tag.tag-hidden {
+  display: none;
+}
+
+.island-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.island-status-text {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--island-text-muted);
+  white-space: nowrap;
+}
+
+/* Expanded Tray for Details */
+.island-expanded {
+  position: relative;
+  z-index: 1;
+  display: none;
+  width: 100%;
+  padding: 0 12px 8px 12px;
+}
+
+.notch-island.expanded .island-expanded {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  animation: island-expand-fade 0.2s ease;
+}
+
+.expanded-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-width: 250px;
+}
+
+.expanded-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--island-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.expanded-command {
+  font-size: 11px;
+  font-weight: 500;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.expanded-btn {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  outline: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.expanded-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+/* Keyframe Animations */
+@keyframes dot-heartbeat {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.9);
+  }
+  30% {
+    transform: scale(1.3);
+    box-shadow: 0 0 16px rgba(239, 68, 68, 1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes dot-pulse-orange {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
+  }
+  50% {
+    transform: scale(1.25);
+    box-shadow: 0 0 14px rgba(245, 158, 11, 1);
+  }
+}
+
+@keyframes aura-heartbeat {
+  0%, 100% {
+    opacity: 0.8;
+    box-shadow: 0 0 20px 3px rgba(239, 68, 68, 0.55);
+  }
+  30% {
+    opacity: 1;
+    box-shadow: 0 0 28px 6px rgba(239, 68, 68, 0.75);
+  }
+}
+
+@keyframes aura-pulse {
+  0%, 100% {
+    opacity: 0.75;
+    box-shadow: 0 0 18px 2px rgba(245, 158, 11, 0.45);
+  }
+  50% {
+    opacity: 0.95;
+    box-shadow: 0 0 24px 4px rgba(245, 158, 11, 0.65);
+  }
+}
+
+@keyframes island-expand-fade {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

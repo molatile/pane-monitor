@@ -9,6 +9,24 @@
 </head>
 <body>
   <div id="app" class="app-container">
+    <!-- CAMERA NOTCH & AMBIENT GRAPHIC ALERT -->
+    <div id="camera-notch-zone" class="camera-notch-zone">
+      <div id="ambient-top-shade" class="ambient-top-shade shade-off" aria-hidden="true"></div>
+      <div id="camera-notch-pill" class="camera-notch-pill" tabindex="0" role="region" aria-label="Camera Status Alert" title="AgentWatch Status Light (Click to expand HUD)">
+        <div id="notch-traffic-lights" class="notch-traffic-lights">
+          <span class="notch-dot dot-off"></span>
+          <span class="notch-label">ready</span>
+        </div>
+      </div>
+      <div id="notch-dropdown-hud" class="notch-dropdown-hud" style="display: none;">
+        <div class="notch-hud-header">
+          <span class="notch-hud-title">AgentWatch Monitor</span>
+          <span id="notch-hud-status-text" class="notch-hud-status-text">All agents calm</span>
+        </div>
+        <div id="notch-hud-list" class="notch-hud-list"></div>
+      </div>
+    </div>
+
     <header class="app-header">
       <div class="header-left">
         <span class="app-title">agentwatch</span>
@@ -415,6 +433,22 @@
             <div class="setting-text">
               <span class="setting-label">Notifications</span>
               <span class="setting-desc">Show desktop notifications when an agent asks for permission or completes</span>
+            </div>
+          </label>
+
+          <label class="setting-item">
+            <input type="checkbox" id="setting-camera-notch" checked>
+            <div class="setting-text">
+              <span class="setting-label">Camera status alert & ambient glow</span>
+              <span class="setting-desc">Display dynamic notch and ambient alert glow directly beneath the camera</span>
+            </div>
+          </label>
+
+          <label class="setting-item">
+            <input type="checkbox" id="setting-floating-notch" checked>
+            <div class="setting-text">
+              <span class="setting-label">Floating Dynamic Island notch</span>
+              <span class="setting-desc">Floating black oval HUD that hangs from top of screen, auto-adjusts size and hides when calm</span>
             </div>
           </label>
 

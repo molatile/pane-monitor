@@ -31,9 +31,11 @@
     "test:stage7": "node tests/test-stage7.js",
     "test:stage8": "node tests/test-stage8.js",
     "test:stage9": "node tests/test-stage9.js",
+    "test:stage10": "node tests/test-stage10-camera-alert.js",
+    "test:notch": "node tests/test-floating-notch.js",
     "test:unselect": "node tests/test-gui-unselect.js",
     "test:lifecycle": "node tests/test-gui-lifecycle.js",
-    "test:all": "npm test && npm run test:locations && npm run test:gui && npm run test:lifecycle && npm run test:stage3a && npm run test:stage3b && npm run test:stage4 && npm run test:stage4b && npm run test:stage4c && npm run test:stage4d && npm run test:stage5 && npm run test:stage6 && npm run test:stage7 && npm run test:stage8 && npm run test:stage9 && npm run test:unselect && npm run test:fast && npm run test:integration && npm run test:deny",
+    "test:all": "npm test && npm run test:locations && npm run test:gui && npm run test:lifecycle && npm run test:stage3a && npm run test:stage3b && npm run test:stage4 && npm run test:stage4b && npm run test:stage4c && npm run test:stage4d && npm run test:stage5 && npm run test:stage6 && npm run test:stage7 && npm run test:stage8 && npm run test:stage9 && npm run test:stage10 && npm run test:notch && npm run test:unselect && npm run test:fast && npm run test:integration && npm run test:deny",
     "dash": "node bin/agentwatch.js dash",
     "gui": "node bin/agentwatch.js gui"
   },

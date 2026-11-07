@@ -34,6 +34,8 @@ function loadConfig(configPath = CONFIG_PATH) {
         keepAcceptingWhenNoWindow: false,
         allowTurnOnFromWindow: false,
         unlockBuiltinDenyRules: false,
+        cameraNotch: true,
+        floatingNotch: true,
         timeFormat: '24-hour',
         window: { width: 420, height: 360 },
         notified: {}
@@ -52,6 +54,8 @@ function loadConfig(configPath = CONFIG_PATH) {
         keepAcceptingWhenNoWindow: false,
         allowTurnOnFromWindow: false,
         unlockBuiltinDenyRules: false,
+        cameraNotch: true,
+        floatingNotch: true,
         timeFormat: '24-hour',
         window: { width: 420, height: 360 },
         notified: {}
@@ -69,6 +73,8 @@ function loadConfig(configPath = CONFIG_PATH) {
       keepAcceptingWhenNoWindow: Boolean(parsed.keepAcceptingWhenNoWindow),
       allowTurnOnFromWindow: Boolean(parsed.allowTurnOnFromWindow),
       unlockBuiltinDenyRules: Boolean(parsed.unlockBuiltinDenyRules),
+      cameraNotch: parsed.cameraNotch !== undefined ? Boolean(parsed.cameraNotch) : true,
+      floatingNotch: parsed.floatingNotch !== undefined ? Boolean(parsed.floatingNotch) : true,
       timeFormat: (parsed.timeFormat === '12-hour' || parsed.timeFormat === '12h') ? '12-hour' : '24-hour',
       guiPid: typeof parsed.guiPid === 'number' ? parsed.guiPid : undefined,
       guiStartTime: typeof parsed.guiStartTime === 'number' ? parsed.guiStartTime : undefined,
@@ -143,6 +149,12 @@ function saveConfig(config, configPath = CONFIG_PATH) {
     }
     if (config.unlockBuiltinDenyRules !== undefined) {
       sanitized.unlockBuiltinDenyRules = Boolean(config.unlockBuiltinDenyRules);
+    }
+    if (config.cameraNotch !== undefined) {
+      sanitized.cameraNotch = Boolean(config.cameraNotch);
+    }
+    if (config.floatingNotch !== undefined) {
+      sanitized.floatingNotch = Boolean(config.floatingNotch);
     }
     if (config.timeFormat !== undefined) {
       sanitized.timeFormat = (config.timeFormat === '12-hour' || config.timeFormat === '12h') ? '12-hour' : '24-hour';

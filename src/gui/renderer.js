@@ -80,6 +80,17 @@ const nestedBannerNoBtn = getEl('nested-banner-no-btn');
 const nestedBannerDismissBtn = getEl('nested-banner-dismiss-btn');
 const nestedFeedbackBanner = getEl('nested-feedback-banner');
 
+// Camera Notch & Ambient Alert references (Stage 10)
+const cameraNotchZone = getEl('camera-notch-zone');
+const ambientTopShade = getEl('ambient-top-shade');
+const cameraNotchPill = getEl('camera-notch-pill');
+const notchTrafficLights = getEl('notch-traffic-lights');
+const notchDropdownHud = getEl('notch-dropdown-hud');
+const notchHudStatusText = getEl('notch-hud-status-text');
+const notchHudList = getEl('notch-hud-list');
+const settingCameraNotch = getEl('setting-camera-notch');
+const settingFloatingNotch = getEl('setting-floating-notch');
+
 // Rules folder selector elements
 const rulesTargetSelect = getEl('rules-target-select');
 const resetFolderRulesBtn = getEl('reset-folder-rules-btn');
@@ -461,6 +472,9 @@ function render(data) {
 
   // Update Settings tab controls if not currently being interacted with
   updateSettingsTab();
+
+  // Update Camera Notch & Ambient Glow alert
+  updateCameraNotch(sessions, currentConfig);
 
   // If no live sessions, render empty state in sessions container
   if (sessions.length === 0) {
@@ -1705,11 +1719,257 @@ function updateSettingsTab() {
   if (settingTimeFormat && document.activeElement !== settingTimeFormat) {
     settingTimeFormat.value = currentConfig.timeFormat || '24-hour';
   }
+  if (settingCameraNotch && document.activeElement !== settingCameraNotch) {
+    settingCameraNotch.checked = currentConfig.cameraNotch !== false;
+  }
+  if (settingFloatingNotch && document.activeElement !== settingFloatingNotch) {
+    settingFloatingNotch.checked = currentConfig.floatingNotch !== false;
+  }
   if (settingLogDirVal) {
     settingLogDirVal.textContent = (currentConfig && currentConfig.logDir && currentConfig.logDir.trim())
       ? currentConfig.logDir.trim()
       : 'Default: the folder the agent was started in';
   }
+}
+
+// -------------------------------------------------------------
+// Camera Notch & Ambient Graphic Alert (Stage 10)
+// -------------------------------------------------------------
+
+/**
+ * Updates the Camera Notch & Ambient Glow alert at the top of the window directly below webcam.
+ * Computes individual traffic lights for each active agent, plus dominant alert shade.
+ */
+function updateCameraNotch(sessions = [], config = {}) {
+  const notchZone = getEl('camera-notch-zone') || cameraNotchZone;
+  const shade = getEl('ambient-top-shade') || ambientTopShade;
+  const pill = getEl('camera-notch-pill') || cameraNotchPill;
+  const lightsContainer = getEl('notch-traffic-lights') || notchTrafficLights;
+
+  if (!notchZone || !lightsContainer) return;
+
+  // Honor setting if explicitly disabled
+  if (config.cameraNotch === false) {
+    notchZone.classList.add('hidden');
+    if (shade) shade.className = 'ambient-top-shade shade-off';
+    return;
+  } else {
+    notchZone.classList.remove('hidden');
+  }
+
+  const activeSessions = (sessions || []).filter(s => !s.isDead && s.state !== 'dead');
+
+  // Determine dominant state across all agents for ambient shade
+  let dominantState = 'off';
+  if (activeSessions.length > 0) {
+    if (activeSessions.some(s => s.isAsking || s.state === 'asking')) {
+      dominantState = 'asking';
+    } else if (activeSessions.some(s => s.state === 'countdown')) {
+      dominantState = 'countdown';
+    } else if (activeSessions.some(s => s.state === 'busy')) {
+      dominantState = 'busy';
+    } else {
+      dominantState = 'idle';
+    }
+  } else if ((sessions || []).length > 0) {
+    dominantState = 'dead';
+  }
+
+  // Update ambient top glow shade
+  if (shade) {
+    shade.className = `ambient-top-shade shade-${dominantState}`;
+  }
+
+  // Update central notch pill dominant state
+  if (pill) {
+    pill.dataset.dominant = dominantState;
+  }
+
+  // Render traffic lights
+  lightsContainer.innerHTML = '';
+
+  if (activeSessions.length === 0) {
+    const offDot = document.createElement('span');
+    offDot.className = 'notch-dot dot-off';
+    const offLabel = document.createElement('span');
+    offLabel.className = 'notch-label';
+    offLabel.textContent = (sessions && sessions.length > 0) ? 'inactive' : 'ready';
+    lightsContainer.appendChild(offDot);
+    lightsContainer.appendChild(offLabel);
+  } else {
+    activeSessions.forEach((sess, idx) => {
+      if (idx > 0) {
+        const divider = document.createElement('span');
+        divider.className = 'notch-pod-divider';
+        lightsContainer.appendChild(divider);
+      }
+
+      const isAsking = Boolean(sess.isAsking || sess.state === 'asking');
+      const isCountdown = sess.state === 'countdown';
+      const state = isAsking ? 'asking' : (sess.state || 'idle');
+
+      const pod = document.createElement('div');
+      pod.className = `notch-pod state-${state}`;
+      pod.dataset.sessionKey = sess.sessionKey || '';
+
+      const dot = document.createElement('span');
+      dot.className = `notch-dot dot-${state}`;
+      pod.appendChild(dot);
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'notch-agent-name';
+      const name = sess.displayName || sess.folder || sess.agent || 'agent';
+      nameSpan.textContent = name;
+      pod.appendChild(nameSpan);
+
+      if (isCountdown && sess.countdown !== null && sess.countdown !== undefined) {
+        const cdSpan = document.createElement('span');
+        cdSpan.className = 'notch-countdown-tag';
+        cdSpan.textContent = `${sess.countdown}s`;
+        pod.appendChild(cdSpan);
+      } else if (isAsking) {
+        const askSpan = document.createElement('span');
+        askSpan.className = 'notch-asking-tag';
+        askSpan.textContent = '!';
+        pod.appendChild(askSpan);
+      }
+
+      // Tooltip description
+      let title = `${name} [${state.toUpperCase()}]`;
+      if (sess.prompt && (sess.prompt.command || sess.prompt.question)) {
+        title += `: ${sess.prompt.command || sess.prompt.question}`;
+      }
+      pod.title = title;
+
+      // Click on a pod to jump directly to that agent
+      pod.addEventListener('click', (e) => {
+        e.stopPropagation();
+        jumpToAgent(sess.sessionKey);
+      });
+
+      lightsContainer.appendChild(pod);
+    });
+  }
+
+  // Update HUD contents if present
+  updateNotchHud(sessions, activeSessions, dominantState);
+}
+
+/**
+ * Updates the contents of the dropdown HUD under the notch.
+ */
+function updateNotchHud(sessions = [], activeSessions = [], dominantState = 'off') {
+  const hudStatus = getEl('notch-hud-status-text') || notchHudStatusText;
+  const hudList = getEl('notch-hud-list') || notchHudList;
+  if (!hudList) return;
+
+  if (hudStatus) {
+    const askingCount = activeSessions.filter(s => s.isAsking || s.state === 'asking').length;
+    if (askingCount > 0) {
+      hudStatus.textContent = `🔴 ${askingCount} agent${askingCount === 1 ? '' : 's'} need approval`;
+      hudStatus.style.color = '#ef4444';
+    } else if (dominantState === 'countdown') {
+      hudStatus.textContent = '🟠 Auto-accept countdown active';
+      hudStatus.style.color = '#f59e0b';
+    } else if (dominantState === 'busy') {
+      hudStatus.textContent = `🟡 ${activeSessions.length} agent${activeSessions.length === 1 ? '' : 's'} busy`;
+      hudStatus.style.color = '#eab308';
+    } else if (dominantState === 'idle') {
+      hudStatus.textContent = `🟢 All ${activeSessions.length} active agent${activeSessions.length === 1 ? '' : 's'} calm & idle`;
+      hudStatus.style.color = '#22c55e';
+    } else {
+      hudStatus.textContent = '⚪ No active agents running';
+      hudStatus.style.color = 'var(--text-secondary)';
+    }
+  }
+
+  hudList.innerHTML = '';
+  if (!sessions || sessions.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'notch-hud-empty';
+    empty.textContent = 'No agents running. Launch agentwatch <agent> in a terminal.';
+    hudList.appendChild(empty);
+    return;
+  }
+
+  sessions.forEach(sess => {
+    const isAsking = Boolean(sess.isAsking || sess.state === 'asking');
+    const isDead = sess.isDead || sess.state === 'dead';
+    const state = isDead ? 'dead' : (isAsking ? 'asking' : (sess.state || 'idle'));
+
+    const item = document.createElement('div');
+    item.className = 'notch-hud-item';
+    item.title = 'Click to focus this agent';
+    item.addEventListener('click', () => {
+      jumpToAgent(sess.sessionKey);
+    });
+
+    const left = document.createElement('div');
+    left.className = 'notch-hud-item-left';
+
+    const dot = document.createElement('span');
+    dot.className = `notch-dot dot-${state}`;
+    left.appendChild(dot);
+
+    const name = document.createElement('span');
+    name.className = 'notch-hud-item-name';
+    name.textContent = sess.displayName || sess.folder || sess.agent || 'agent';
+    left.appendChild(name);
+
+    if (sess.prompt) {
+      const preview = document.createElement('span');
+      preview.className = 'notch-hud-item-preview';
+      preview.textContent = sess.prompt.command || sess.prompt.question || sess.prompt.decision || '';
+      left.appendChild(preview);
+    }
+    item.appendChild(left);
+
+    const badge = document.createElement('span');
+    badge.className = `notch-hud-item-badge badge-${state}-hud`;
+    if (state === 'countdown' && sess.countdown) {
+      badge.textContent = `${sess.countdown}s`;
+    } else {
+      badge.textContent = state;
+    }
+    item.appendChild(badge);
+
+    hudList.appendChild(item);
+  });
+}
+
+function toggleNotchHud() {
+  const hud = getEl('notch-dropdown-hud') || notchDropdownHud;
+  const pill = getEl('camera-notch-pill') || cameraNotchPill;
+  if (!hud) return;
+  const isShown = hud.style.display !== 'none';
+  if (isShown) {
+    closeNotchHud();
+  } else {
+    hud.style.display = 'block';
+    if (pill) pill.classList.add('hud-open');
+  }
+}
+
+function closeNotchHud() {
+  const hud = getEl('notch-dropdown-hud') || notchDropdownHud;
+  const pill = getEl('camera-notch-pill') || cameraNotchPill;
+  if (hud) hud.style.display = 'none';
+  if (pill) pill.classList.remove('hud-open');
+}
+
+function jumpToAgent(sessionKey) {
+  if (!sessionKey) return;
+  if (tabBtnAgents && !tabBtnAgents.classList.contains('active')) {
+    switchTab('agents');
+  }
+  selectAgent(sessionKey);
+  if (container) {
+    const row = container.querySelector(`[data-session-key="${sessionKey}"]`);
+    if (row && typeof row.scrollIntoView === 'function') {
+      row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+  closeNotchHud();
 }
 
 // -------------------------------------------------------------
@@ -2171,6 +2431,82 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   window.addEventListener('keydown', handleKeyDown);
 } else if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
   document.addEventListener('keydown', handleKeyDown);
+}
+
+// Camera Notch & HUD event listeners
+if (cameraNotchPill) {
+  cameraNotchPill.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleNotchHud();
+  });
+  cameraNotchPill.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleNotchHud();
+    } else if (e.key === 'Escape') {
+      closeNotchHud();
+    }
+  });
+}
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('click', (e) => {
+    const zone = getEl('camera-notch-zone') || cameraNotchZone;
+    const hud = getEl('notch-dropdown-hud') || notchDropdownHud;
+    if (hud && hud.style.display !== 'none' && zone && !zone.contains(e.target)) {
+      closeNotchHud();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || e.key === 'Esc') {
+      closeNotchHud();
+    }
+  });
+}
+
+if (settingCameraNotch) {
+  settingCameraNotch.addEventListener('change', (e) => {
+    const val = e.target.checked;
+    currentConfig.cameraNotch = val;
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
+      Promise.resolve(window.agentwatch.setSetting('cameraNotch', val)).then((res) => {
+        if (!res || res.success) {
+          showToast('Saved');
+        } else {
+          currentConfig.cameraNotch = !val;
+          settingCameraNotch.checked = !val;
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+        }
+      }).catch((err) => {
+        currentConfig.cameraNotch = !val;
+        settingCameraNotch.checked = !val;
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
+    }
+    updateCameraNotch(currentSessions, currentConfig);
+  });
+}
+
+if (settingFloatingNotch) {
+  settingFloatingNotch.addEventListener('change', (e) => {
+    const val = e.target.checked;
+    currentConfig.floatingNotch = val;
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setSetting) {
+      Promise.resolve(window.agentwatch.setSetting('floatingNotch', val)).then((res) => {
+        if (!res || res.success) {
+          showToast('Saved');
+        } else {
+          currentConfig.floatingNotch = !val;
+          settingFloatingNotch.checked = !val;
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+        }
+      }).catch((err) => {
+        currentConfig.floatingNotch = !val;
+        settingFloatingNotch.checked = !val;
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
+    }
+  });
 }
 
 // Setup IPC listeners in Electron environment
@@ -3752,6 +4088,11 @@ if (typeof module !== 'undefined' && module.exports) {
     getCurrentConfig: () => currentConfig,
     setKnownAgents: (agents) => { knownAgents = agents; },
     getKnownAgents: () => knownAgents,
+    updateCameraNotch,
+    updateNotchHud,
+    toggleNotchHud,
+    closeNotchHud,
+    jumpToAgent,
     resetState: () => {
       rowCache.clear();
       currentSessions = [];
@@ -3766,6 +4107,9 @@ if (typeof module !== 'undefined' && module.exports) {
       if (container) container.innerHTML = '';
       if (pastAgentsList) pastAgentsList.innerHTML = '';
       if (historyGroups) historyGroups.innerHTML = '';
+      if (notchTrafficLights) notchTrafficLights.innerHTML = '';
+      if (notchHudList) notchHudList.innerHTML = '';
+      if (ambientTopShade) ambientTopShade.className = 'ambient-top-shade shade-off';
     }
   };
 }
