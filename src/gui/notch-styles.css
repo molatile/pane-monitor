@@ -59,9 +59,10 @@ html, body {
   cursor: pointer;
   outline: none;
   overflow: hidden;
-  min-width: 160px;
-  max-width: 500px;
-  height: 38px;
+  min-width: 240px;
+  max-width: 540px;
+  height: 40px;
+  box-sizing: border-box;
 
   /* Hanging Slide Animations & Smooth Spring Sizing */
   transform: translateY(-120%);
@@ -83,17 +84,41 @@ html, body {
   pointer-events: auto;
 }
 
-/* Gentle Bobbing / Floating Mode for Active Green */
-.notch-island.bobbing {
-  transform: translateY(-4px);
-  animation: island-bobbing 2.6s ease-in-out infinite;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.65), 0 0 10px rgba(34, 197, 94, 0.25);
-  border-color: rgba(34, 197, 94, 0.3);
+/* Partially Hidden Mode for Active Green (Static, No Bobbing) */
+.notch-island.bobbing,
+.notch-island.partially-hidden {
+  transform: translateY(-30px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.7), 0 0 12px rgba(34, 197, 94, 0.35);
+  border-color: rgba(34, 197, 94, 0.45);
 }
 
-.notch-island.bobbing:hover {
+.notch-island.bobbing:hover,
+.notch-island.partially-hidden:hover {
   animation: none;
   transform: translateY(0);
+}
+
+/* Glowing green pill handle nudging from behind the top bezel */
+.notch-island.bobbing::after,
+.notch-island.partially-hidden::after {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 26px;
+  height: 3px;
+  border-radius: 9999px;
+  background: var(--color-green);
+  box-shadow: 0 0 8px var(--color-green);
+  opacity: 0.95;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.notch-island:not(.bobbing):not(.partially-hidden)::after,
+.notch-island.expanded::after {
+  display: none;
 }
 
 /* Hover / Focus interaction */
@@ -105,7 +130,7 @@ html, body {
 
 /* Expanded State (Hover or Active Alert Detail) - Proportional & Spacious */
 .notch-island.expanded {
-  height: 92px;
+  height: 104px;
   border-bottom-left-radius: 24px;
   border-bottom-right-radius: 24px;
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.92), 0 0 1px rgba(255, 255, 255, 0.2);
@@ -154,10 +179,11 @@ html, body {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  height: 38px;
-  padding: 0 12px;
-  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  gap: 10px;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .island-left {
@@ -200,11 +226,13 @@ html, body {
 }
 
 .island-agent-name {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--island-text);
   letter-spacing: -0.01em;
   white-space: nowrap;
+  line-height: 1.3;
+  display: inline-block;
 }
 
 /* Center: Pager and Tag Container */
@@ -279,10 +307,16 @@ html, body {
   justify-content: center;
   font-size: 10px;
   font-weight: 700;
-  padding: 1px 6px;
+  padding: 2px 7px;
   border-radius: 9999px;
-  line-height: 14px;
+  line-height: 1.2;
   transition: all 0.2s ease;
+}
+
+.island-tag.tag-green {
+  background: rgba(34, 197, 94, 0.22);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.45);
 }
 
 .island-tag.tag-orange {
@@ -304,7 +338,7 @@ html, body {
 .island-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
@@ -313,6 +347,8 @@ html, body {
   font-weight: 500;
   color: var(--island-text-muted);
   white-space: nowrap;
+  line-height: 1.3;
+  display: inline-block;
 }
 
 .island-quick-hide {
@@ -322,9 +358,12 @@ html, body {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  padding: 2px 4px;
+  padding: 3px 5px;
   border-radius: 4px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: color 0.15s ease, background 0.15s ease;
 }
 
@@ -340,8 +379,9 @@ html, body {
   display: none;
   width: 100%;
   flex-direction: column;
-  padding: 0 14px 10px 14px;
-  gap: 6px;
+  padding: 2px 14px 10px 14px;
+  gap: 8px;
+  box-sizing: border-box;
 }
 
 .notch-island.expanded .island-expanded {
@@ -446,9 +486,10 @@ html, body {
   text-overflow: ellipsis;
   font-family: var(--font-mono);
   background: rgba(255, 255, 255, 0.05);
-  padding: 1px 5px;
+  padding: 2px 7px;
   border-radius: 4px;
   border: 1px solid rgba(255, 255, 255, 0.08);
+  line-height: 1.3;
 }
 
 .expanded-subtext {
@@ -457,7 +498,8 @@ html, body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-left: 18px;
+  padding-left: 20px;
+  line-height: 1.3;
 }
 
 .expanded-subtext:empty {
@@ -471,11 +513,13 @@ html, body {
   color: #ffffff;
   font-size: 10px;
   font-weight: 600;
-  padding: 4px 12px;
+  padding: 5px 12px;
   cursor: pointer;
   white-space: nowrap;
   outline: none;
   flex-shrink: 0;
+  line-height: 1.2;
+  box-sizing: border-box;
   transition: all 0.18s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
@@ -501,10 +545,10 @@ html, body {
 /* Keyframe Animations */
 @keyframes island-bobbing {
   0%, 100% {
-    transform: translateY(-5px);
+    transform: translateY(-30px);
   }
   50% {
-    transform: translateY(-1px);
+    transform: translateY(-30px);
   }
 }
 

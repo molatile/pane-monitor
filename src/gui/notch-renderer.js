@@ -1,10 +1,11 @@
 /**
  * AgentWatch Floating Notch Island Renderer
  * Controls Dynamic Island appearance, auto-adjustment, agent scrolling,
- * pop-up lifecycle, bobbing animation, and live decision updates.
+ * pop-up lifecycle, partially-hidden state, and live decision updates.
  */
 
 const doc = (typeof document !== 'undefined') ? document : null;
+const notchContainer = doc ? doc.getElementById('notch-container') : null;
 const notchIsland = doc ? doc.getElementById('notch-island') : null;
 const islandGlow = doc ? doc.getElementById('island-glow') : null;
 const islandDot = doc ? doc.getElementById('island-dot') : null;
@@ -40,6 +41,7 @@ const recentlyCompletedSessions = new Set();
 
 /**
  * Computes dominant state from sessions list.
+ * Only green and red are displayed (no yellow/orange).
  */
 function computeNotchState(sessions = [], config = {}) {
   // If explicitly disabled in config, always hide
@@ -58,15 +60,11 @@ function computeNotchState(sessions = [], config = {}) {
     return { state: 'red', session: askingSession };
   }
 
-  // Priority 2: COUNTDOWN (Orange Alert)
+  // Priority 2: ACTIVE (Green Alert) - Countdown, Busy, or Idle
+  // No need to display yellow/orange; only green and red
   const countdownSession = activeSessions.find(s => s.state === 'countdown');
-  if (countdownSession) {
-    return { state: 'orange', session: countdownSession };
-  }
-
-  // Priority 3: ACTIVE (Green - Busy or Idle)
   const busySession = activeSessions.find(s => s.state === 'busy');
-  const topActive = busySession || activeSessions[0];
+  const topActive = countdownSession || busySession || activeSessions[0];
   return { state: 'green', session: topActive };
 }
 
@@ -135,8 +133,7 @@ function renderCurrentAgent() {
 
   const session = currentTopSession;
   const isAsking = Boolean(session.isAsking || session.state === 'asking');
-  const isCountdown = Boolean(session.state === 'countdown');
-  const specificState = isAsking ? 'red' : (isCountdown ? 'orange' : 'green');
+  const specificState = isAsking ? 'red' : 'green';
 
   applyNotchState(specificState, session);
 }
@@ -153,6 +150,7 @@ function applyNotchState(newState, session) {
       notchIsland.classList.remove('visible');
       notchIsland.classList.remove('expanded');
       notchIsland.classList.remove('bobbing');
+      notchIsland.classList.remove('partially-hidden');
     }
     if (islandGlow) islandGlow.className = 'island-glow glow-hidden';
     if (islandDot) islandDot.className = 'island-dot dot-off';
@@ -191,15 +189,8 @@ function applyNotchState(newState, session) {
       greenBobTimer = null;
     }
     isBobbing = false;
-  } else if (newState === 'orange') {
-    // Countdown alert stays visible
-    if (greenBobTimer) {
-      clearTimeout(greenBobTimer);
-      greenBobTimer = null;
-    }
-    isBobbing = false;
   } else if (newState === 'green') {
-    // Green state: pops up once and then enters bobbing mode
+    // Green state: pops up once fully, then enters static partially-hidden mode
     if (!isBobbing && !isHovered && !greenBobTimer) {
       greenBobTimer = setTimeout(() => {
         greenBobTimer = null;
@@ -207,10 +198,11 @@ function applyNotchState(newState, session) {
           isBobbing = true;
           if (notchIsland) {
             notchIsland.classList.add('bobbing');
+            notchIsland.classList.add('partially-hidden');
           }
           adjustDimensions();
         }
-      }, 4000);
+      }, 3500);
     }
   }
 
@@ -252,24 +244,28 @@ function applyNotchState(newState, session) {
     tagText = '[!]';
     tagClass = 'island-tag tag-red';
     commandHint = isFileEdit ? `Permission: ${targetText}` : (prompt && prompt.command ? prompt.command : 'Action requested by agent');
-  } else if (newState === 'orange') {
-    const secs = (session && session.countdown !== undefined && session.countdown !== null) ? `${session.countdown}s` : '3s';
-    statusText = `${secs} Auto`;
-    tagText = secs;
-    tagClass = 'island-tag tag-orange';
-    commandHint = `Auto-approving: ${targetText}`;
   } else {
-    // Green: accurately report Ready vs Completed vs Working
-    tagClass = 'island-tag tag-hidden';
+    // Green: accurately report Countdown vs Ready vs Completed vs Working (no yellow/orange)
+    const isCountdown = Boolean(session && session.state === 'countdown');
     const isBusy = Boolean(session && session.state === 'busy');
-    if (isBusy) {
+
+    if (isCountdown) {
+      const secs = (session && session.countdown !== undefined && session.countdown !== null) ? `${session.countdown}s` : '3s';
+      statusText = `${secs} Auto`;
+      tagText = secs;
+      tagClass = 'island-tag tag-green';
+      commandHint = `Auto-approving: ${targetText}`;
+    } else if (isBusy) {
       statusText = 'Working...';
+      tagClass = 'island-tag tag-hidden';
       commandHint = `${agentName} is running tasks`;
     } else if (session && recentlyCompletedSessions.has(session.sessionId)) {
       statusText = 'Completed';
+      tagClass = 'island-tag tag-hidden';
       commandHint = `${agentName} finished task · Ready`;
     } else {
       statusText = 'Ready';
+      tagClass = 'island-tag tag-hidden';
       commandHint = `${agentName} is ready`;
     }
   }
@@ -298,11 +294,11 @@ function applyNotchState(newState, session) {
 
   if (expandedTitle) {
     expandedTitle.textContent = newState === 'red' ? '⚠️ Permission Request'
-      : (newState === 'orange' ? '⏱️ Auto-Accept Countdown' : 'Active Agent');
+      : (session && session.state === 'countdown' ? '⏱️ Auto-Accept Countdown' : 'Active Agent');
   }
 
   if (expandedOpenBtn) {
-    if (newState === 'red' || newState === 'orange') {
+    if (newState === 'red') {
       expandedOpenBtn.textContent = 'Open Decision ↗';
       expandedOpenBtn.classList.add('btn-alert');
     } else {
@@ -311,9 +307,10 @@ function applyNotchState(newState, session) {
     }
   }
 
-  // Update glows and dots
-  if (islandGlow) islandGlow.className = `island-glow glow-${newState}`;
-  if (islandDot) islandDot.className = `island-dot dot-${newState}`;
+  // Update glows and dots (only green and red)
+  const dominantColor = newState === 'red' ? 'red' : 'green';
+  if (islandGlow) islandGlow.className = `island-glow glow-${dominantColor}`;
+  if (islandDot) islandDot.className = `island-dot dot-${dominantColor}`;
 
   // Make visible & set appropriate mode class
   if (notchIsland) {
@@ -321,12 +318,15 @@ function applyNotchState(newState, session) {
     if (isHovered) {
       notchIsland.classList.add('expanded');
       notchIsland.classList.remove('bobbing');
+      notchIsland.classList.remove('partially-hidden');
     } else if (isBobbing && newState === 'green') {
       notchIsland.classList.add('bobbing');
+      notchIsland.classList.add('partially-hidden');
       notchIsland.classList.remove('expanded');
     } else {
       notchIsland.classList.remove('expanded');
       notchIsland.classList.remove('bobbing');
+      notchIsland.classList.remove('partially-hidden');
     }
   }
 
@@ -337,15 +337,15 @@ function applyNotchState(newState, session) {
  * Calculates responsive width and height and synchronizes Electron window size.
  */
 function adjustDimensions() {
-  let targetWidth = 220;
-  let targetHeight = 38;
+  let targetWidth = 260;
+  let targetHeight = 40;
 
   if (isHovered) {
-    targetWidth = 420;
-    targetHeight = 92;
+    targetWidth = 440;
+    targetHeight = 104;
   } else if (isBobbing && currentState === 'green') {
-    targetWidth = 190;
-    targetHeight = 34;
+    targetWidth = 220;
+    targetHeight = 40;
   } else {
     // Compact Popped bar
     const agentName = currentTopSession ? getAgentDisplayName(currentTopSession) : 'agentwatch';
@@ -353,13 +353,11 @@ function adjustDimensions() {
     const textLen = agentName.length + statusText.length;
 
     if (currentState === 'red') {
-      targetWidth = Math.max(280, Math.min(380, 210 + textLen * 5));
-    } else if (currentState === 'orange') {
-      targetWidth = Math.max(260, Math.min(360, 190 + textLen * 5));
+      targetWidth = Math.max(300, Math.min(420, 220 + textLen * 6));
     } else {
-      targetWidth = Math.max(200, Math.min(320, 160 + textLen * 5));
+      targetWidth = Math.max(260, Math.min(380, 190 + textLen * 6));
     }
-    targetHeight = 38;
+    targetHeight = 40;
   }
 
   if (notchIsland) {
@@ -368,7 +366,7 @@ function adjustDimensions() {
 
   // Request window resize to tightly fit island + padding
   if (typeof window !== 'undefined' && window.notchApi && typeof window.notchApi.resize === 'function') {
-    window.notchApi.resize({ width: targetWidth + 24, height: targetHeight + 14 });
+    window.notchApi.resize({ width: targetWidth + 24, height: targetHeight + 16 });
   }
 }
 
@@ -377,7 +375,7 @@ function adjustDimensions() {
 // -------------------------------------------------------------
 
 if (notchIsland) {
-  // Hover interactions
+  // Hover interactions - displays what's happening on hover
   notchIsland.addEventListener('mouseenter', () => {
     isHovered = true;
     if (greenBobTimer) {
@@ -391,6 +389,9 @@ if (notchIsland) {
 
   notchIsland.addEventListener('mouseleave', () => {
     isHovered = false;
+    if (currentState === 'green') {
+      isBobbing = true;
+    }
     if (currentState !== 'hidden') {
       applyNotchState(currentState, currentTopSession);
     }
@@ -432,6 +433,33 @@ if (notchIsland) {
     } else if (e.key === 'Escape') {
       e.preventDefault();
       hideForNow(e);
+    }
+  });
+}
+
+if (notchContainer) {
+  notchContainer.addEventListener('mouseenter', () => {
+    if (!isHovered) {
+      isHovered = true;
+      if (greenBobTimer) {
+        clearTimeout(greenBobTimer);
+        greenBobTimer = null;
+      }
+      if (currentState !== 'hidden') {
+        applyNotchState(currentState, currentTopSession);
+      }
+    }
+  });
+
+  notchContainer.addEventListener('mouseleave', (e) => {
+    if (!e.relatedTarget || !notchContainer.contains(e.relatedTarget)) {
+      isHovered = false;
+      if (currentState === 'green') {
+        isBobbing = true;
+      }
+      if (currentState !== 'hidden') {
+        applyNotchState(currentState, currentTopSession);
+      }
     }
   });
 }
@@ -499,6 +527,16 @@ if (typeof window !== 'undefined' && window.notchApi && typeof window.notchApi.o
       } else {
         applyNotchState('hidden', null);
         return;
+      }
+    }
+
+    // When green color happens or task completes: pop up once fully!
+    const { state: nextComputedState } = computeNotchState(data.sessions, data.config);
+    if (hasCompletedTask || (currentState !== 'green' && nextComputedState === 'green')) {
+      isBobbing = false;
+      if (greenBobTimer) {
+        clearTimeout(greenBobTimer);
+        greenBobTimer = null;
       }
     }
 

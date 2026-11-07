@@ -100,16 +100,16 @@ const { computeNotchState, getAgentDisplayName } = require('../src/gui/notch-ren
   assert.strictEqual(res.session.sessionId, 's2');
 }
 
-// Case F: Countdown session -> ORANGE ALERT
+// Case F: Countdown session -> GREEN (no yellow/orange; only green and red)
 {
   const s1 = { sessionId: 's1', state: 'idle', agent: 'agy' };
   const s2 = { sessionId: 's2', state: 'countdown', countdown: 4, agent: 'agy', folder: 'auto-app' };
   const res = computeNotchState([s1, s2], {});
-  assert.strictEqual(res.state, 'orange', 'Countdown session must trigger orange state');
+  assert.strictEqual(res.state, 'green', 'Countdown session must trigger green state (no yellow ones, only green and red)');
   assert.strictEqual(res.session.sessionId, 's2');
 }
 
-// Case G: Priority Hierarchy: RED beats ORANGE and GREEN
+// Case G: Priority Hierarchy: RED beats GREEN (both countdown and busy are green)
 {
   const sGreen = { sessionId: 's1', state: 'busy' };
   const sOrange = { sessionId: 's2', state: 'countdown', countdown: 3 };
@@ -181,7 +181,7 @@ console.log('  ✓ floatingNotch config setting successfully saved and persisted
 // -------------------------------------------------------------
 // Test 5: New Interaction & Dynamic Island Elements
 // -------------------------------------------------------------
-console.log('\n--- Test 5: New Dynamic Island Pager, Bobbing & Snooze Elements ---');
+console.log('\n--- Test 5: New Dynamic Island Pager, Partially Hidden & Snooze Elements ---');
 assert(html.includes('id="island-pager"'), 'notch.html must have #island-pager for scrolling agents');
 assert(html.includes('id="pager-prev-btn"'), 'notch.html must have #pager-prev-btn');
 assert(html.includes('id="pager-next-btn"'), 'notch.html must have #pager-next-btn');
@@ -190,8 +190,10 @@ assert(html.includes('id="island-hide-btn"'), 'notch.html must have #island-hide
 assert(html.includes('id="expanded-hide-btn"'), 'notch.html must have #expanded-hide-btn in expanded tray');
 assert(html.includes('id="expanded-target-icon"'), 'notch.html must have #expanded-target-icon');
 
-assert(css.includes('.notch-island.bobbing'), 'notch-styles.css must style .notch-island.bobbing');
-assert(css.includes('island-bobbing'), 'notch-styles.css must have island-bobbing keyframe animation');
+assert(css.includes('.notch-island.bobbing') || css.includes('.notch-island.partially-hidden'), 'notch-styles.css must style partially hidden notch');
+assert(!css.includes('animation: island-bobbing'), 'notch-styles.css must not have active bobbing animation');
+assert(css.includes('translateY(-30px)'), 'notch-styles.css must remain partially hidden');
+assert(css.includes('.island-tag.tag-green'), 'notch-styles.css must support .tag-green (only green and red displayed)');
 assert(css.includes('.island-pager'), 'notch-styles.css must style .island-pager');
 assert(css.includes('.expanded-hide-btn'), 'notch-styles.css must style .expanded-hide-btn');
 
@@ -199,7 +201,7 @@ const guiPreload = fs.readFileSync(path.join(__dirname, '../src/gui/preload.js')
 assert(guiPreload.includes('onJumpToAgent:'), 'GUI preload must expose onJumpToAgent');
 assert(main.includes('jump-to-agent'), 'main.js must send jump-to-agent IPC on notch click');
 
-console.log('  ✓ Dynamic Island elements, bobbing styles, and IPC navigation routes verified');
+console.log('  ✓ Dynamic Island elements, static partially-hidden styles, and IPC navigation routes verified');
 
 // -------------------------------------------------------------
 // Test 6: Agent Scrolling & Hide-For-Now Functions
