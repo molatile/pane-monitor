@@ -331,21 +331,22 @@
       "name": "always-in-conversation",
       "startsWith": "Yes, and always allow in this conversation",
       "enabled": true,
-      "allowPersist": false
+      "allowPersist": false,
+      "allowTruncatedCommand": true
     },
     {
       "name": "custom-rule-2",
       "startsWith": "Yes, allow creation",
-      "commandStartsWith": "Yes, allow creation",
       "enabled": true,
-      "allowPersist": false
+      "allowPersist": false,
+      "allowTruncatedCommand": true
     },
     {
       "name": "custom-rule-3",
       "startsWith": "Yes, accept this change",
-      "commandStartsWith": "Yes, accept this change",
       "enabled": true,
-      "allowPersist": false
+      "allowPersist": false,
+      "allowTruncatedCommand": true
     },
     {
       "name": "accept-file-edit",
@@ -353,14 +354,9 @@
       "promptTypes": [
         "file_edit"
       ],
-      "enabled": false
-    },
-    {
-      "name": "custom-rule-5",
-      "startsWith": "Yes, and always allow in this conversation for commands that start with 'node -e \"",
-      "commandStartsWith": "node -e",
       "enabled": true,
-      "allowPersist": false
+      "allowPersist": false,
+      "allowTruncatedCommand": true
     }
   ]
 }

@@ -593,6 +593,74 @@ function normalizeRuleText(text) {
     .replace(/\s+/g, '');
 }
 
+/**
+ * Normalizes a word for comparison: lowercases and strips leading/trailing non-alphanumeric (except dashes).
+ */
+function normalizeWord(w) {
+  return String(w || '').toLowerCase().replace(/^[^\w-]+|[^\w-]+$/g, '');
+}
+
+/**
+ * Counts consecutive leading matching words between two texts.
+ * Ignores numbering/markers, punctuation on word edges, and case.
+ */
+function countLeadingMatchingWords(textA, textB) {
+  const wordsA = (typeof textA === 'string' ? textA : '')
+    .replace(/^\s*(?:>\s*)?\d+[\.\)\-]?\s*/, '')
+    .trim()
+    .split(/\s+/)
+    .map(normalizeWord)
+    .filter(Boolean);
+
+  const wordsB = (typeof textB === 'string' ? textB : '')
+    .replace(/^\s*(?:>\s*)?\d+[\.\)\-]?\s*/, '')
+    .trim()
+    .split(/\s+/)
+    .map(normalizeWord)
+    .filter(Boolean);
+
+  let matchCount = 0;
+  const maxCheck = Math.min(wordsA.length, wordsB.length);
+  for (let i = 0; i < maxCheck; i++) {
+    if (wordsA[i] === wordsB[i]) {
+      matchCount++;
+    } else {
+      break;
+    }
+  }
+  return { matchCount, wordsA, wordsB };
+}
+
+/**
+ * Checks if option text matches rule.startsWith prefix:
+ * 1. Full normalized character prefix match (normOption.startsWith(normStartsWith))
+ * 2. Word-level prefix match: 3-4 or 5 words are sufficient to identify which option to select,
+ *    without requiring the option text (or command inside it) to fully match.
+ */
+function matchesOptionPrefix(ruleStartsWith, optionText) {
+  const normOption = normalizeOptionText(optionText);
+  const normStartsWith = normalizeRuleText(ruleStartsWith || '');
+  if (!normStartsWith) return false;
+
+  if (normOption.startsWith(normStartsWith)) {
+    return true;
+  }
+
+  const { matchCount, wordsA: ruleWords } = countLeadingMatchingWords(ruleStartsWith || '', optionText || '');
+  if (ruleWords.length >= 3) {
+    const threshold = Math.min(ruleWords.length, 5);
+    if (matchCount >= threshold && matchCount >= 3) {
+      return true;
+    }
+  } else if (ruleWords.length > 0) {
+    if (matchCount === ruleWords.length) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function matchesOptionRule(rule, option, cmdSpacedOrPrompt, promptObj) {
   if (!rule || rule.enabled === false) return false;
   if (!option || typeof option.text !== 'string') return false;
@@ -624,32 +692,32 @@ function matchesOptionRule(rule, option, cmdSpacedOrPrompt, promptObj) {
     const extracted = prefix.match(/for commands that start with ['"]([^'"]+)['"]/i);
     if (extracted) prefix = extracted[1];
 
-    let target = '';
-    if (prompt && prompt.promptType === 'file_edit') {
-      target = prompt.targetFile || prompt.commandSpaced || prompt.command || '';
-    } else {
-      target = (prompt && (prompt.commandSpaced || prompt.command)) || cmdSpaced || '';
-    }
+    // If commandStartsWith was accidentally set to option text (e.g. starts with "Yes", "Allow", "Accept"),
+    // do not treat it as a command filter because Agentwatch evaluates options and not the command.
+    const isAccidentalOptionText = /^(?:yes\b|allow\b|accept\b|run\b|proceed\b|no\b|cancel\b)/i.test(prefix);
+    if (!isAccidentalOptionText) {
+      let target = '';
+      if (prompt && prompt.promptType === 'file_edit') {
+        target = prompt.targetFile || prompt.commandSpaced || prompt.command || '';
+      } else {
+        target = (prompt && (prompt.commandSpaced || prompt.command)) || cmdSpaced || '';
+      }
 
-    const normTarget = target.toLowerCase().replace(/\s+/g, '');
-    const normPrefix = prefix.toLowerCase().replace(/\s+/g, '');
-    if (!normTarget.startsWith(normPrefix)) {
-      return false;
+      const normTarget = target.toLowerCase().replace(/\s+/g, '');
+      const normPrefix = prefix.toLowerCase().replace(/\s+/g, '');
+      if (!normTarget.startsWith(normPrefix)) {
+        return false;
+      }
     }
   }
 
-  const normOption = normalizeOptionText(option.text);
-  const normStartsWith = normalizeRuleText(rule.startsWith || '');
-  if (!normStartsWith) return false;
-
-  // An option is a candidate only if its normalized text starts with the whole normalized rule text;
-  // a rule that only partly matches an option never counts.
-  if (!normOption.startsWith(normStartsWith)) {
+  if (!matchesOptionPrefix(rule.startsWith, option.text)) {
     return false;
   }
 
   if (rule.endsWith && typeof rule.endsWith === 'string' && rule.endsWith.trim() !== '') {
     const normEndsWith = normalizeRuleText(rule.endsWith);
+    const normOption = normalizeOptionText(option.text);
     if (!normOption.endsWith(normEndsWith)) {
       return false;
     }
@@ -1054,35 +1122,50 @@ function resolveWinningOptionRule(enabledOptionRules, prompt, ruleListType, rule
     if (candidates.length === 1) {
       matchedOption = candidates[0];
     } else {
-      // 2. Candidate with least extra text after the rule text
+      // 2. Candidate that matches the most leading words following hierarchy
+      let maxMatches = -1;
       let minExtra = Infinity;
       for (const cand of candidates) {
+        const { matchCount } = countLeadingMatchingWords(rule.startsWith || '', cand.text);
         const extra = normalizeOptionText(cand.text).length - normRule.length;
-        if (extra < minExtra) {
+        if (matchCount > maxMatches) {
+          maxMatches = matchCount;
+          minExtra = extra;
+        } else if (matchCount === maxMatches && extra < minExtra) {
           minExtra = extra;
         }
       }
       const bestCandidates = candidates.filter(cand => {
+        const { matchCount } = countLeadingMatchingWords(rule.startsWith || '', cand.text);
         const extra = normalizeOptionText(cand.text).length - normRule.length;
-        return extra === minExtra;
+        return matchCount === maxMatches && extra === minExtra;
       });
 
       if (bestCandidates.length === 1) {
         matchedOption = bestCandidates[0];
       } else {
-        // 3. If still tied, press nothing and explain the tie
-        const tiedKeys = bestCandidates.map(c => c.key || String(c.number)).join(' and ');
-        const reason = `tie between options ${tiedKeys} (multiple options matched winning rule "${rule.name}")`;
-        const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
-        return {
-          action: 'needs_user',
-          rule: rule.name,
-          winningRule: rule.name,
-          ruleList: ruleListType,
-          skippedRules: skippedRules.slice(),
-          reason,
-          log: `Dry-run: needs_user (${reason}${skippedInfo})`
-        };
+        // If tied on words and extra length, check session vs once hierarchy
+        const sessionCand = bestCandidates.filter(c => c.classification === 'yes_session');
+        const onceCand = bestCandidates.filter(c => c.classification === 'yes_once');
+        if (sessionCand.length === 1 && onceCand.length > 0) {
+          matchedOption = sessionCand[0];
+        } else if (onceCand.length === 1 && sessionCand.length === 0) {
+          matchedOption = onceCand[0];
+        } else {
+          // 3. If still tied, press nothing and explain the tie
+          const tiedKeys = bestCandidates.map(c => c.key || String(c.number)).join(' and ');
+          const reason = `tie between options ${tiedKeys} (multiple options matched winning rule "${rule.name}")`;
+          const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
+          return {
+            action: 'needs_user',
+            rule: rule.name,
+            winningRule: rule.name,
+            ruleList: ruleListType,
+            skippedRules: skippedRules.slice(),
+            reason,
+            log: `Dry-run: needs_user (${reason}${skippedInfo})`
+          };
+        }
       }
     }
 
@@ -1193,11 +1276,18 @@ function explainOptionMatches(prompt, customRules) {
       }
 
       if (rule.commandStartsWith && typeof rule.commandStartsWith === 'string' && rule.commandStartsWith.trim() !== '') {
-        const cmd = (prompt.commandSpaced || prompt.command || prompt.targetFile || '').toLowerCase().replace(/\s+/g, '');
-        const prefix = rule.commandStartsWith.toLowerCase().replace(/\s+/g, '');
-        if (!cmd.startsWith(prefix)) {
-          reasons.push(`rule "${rule.name}": command does not start with "${rule.commandStartsWith}"`);
-          continue;
+        let prefix = rule.commandStartsWith.trim();
+        const extracted = prefix.match(/for commands that start with ['"]([^'"]+)['"]/i);
+        if (extracted) prefix = extracted[1];
+
+        const isAccidentalOptionText = /^(?:yes\b|allow\b|accept\b|run\b|proceed\b|no\b|cancel\b)/i.test(prefix);
+        if (!isAccidentalOptionText) {
+          const cmd = (prompt.commandSpaced || prompt.command || prompt.targetFile || '').toLowerCase().replace(/\s+/g, '');
+          const normPrefix = prefix.toLowerCase().replace(/\s+/g, '');
+          if (!cmd.startsWith(normPrefix)) {
+            reasons.push(`rule "${rule.name}": command does not start with "${rule.commandStartsWith}"`);
+            continue;
+          }
         }
       }
 
@@ -1206,7 +1296,7 @@ function explainOptionMatches(prompt, customRules) {
         continue;
       }
 
-      if (!normOpt.startsWith(normRule)) {
+      if (!matchesOptionPrefix(rule.startsWith, text)) {
         reasons.push(`rule "${rule.name}": startsWith did not match option prefix`);
         continue;
       }
@@ -2510,6 +2600,8 @@ module.exports = {
   validateAllRules,
   validateFolderRules,
   matchesOptionRule,
+  countLeadingMatchingWords,
+  matchesOptionPrefix,
   normalizeOptionText,
   normalizeRuleText,
   explainOptionMatches,
