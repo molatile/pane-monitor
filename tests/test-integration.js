@@ -20,7 +20,8 @@ function runSpike(appScript, callback) {
     [path.join(rootDir, 'spike.js'), 'node', appScript],
     {
       cwd: rootDir,
-      stdio: 'inherit'
+      stdio: 'inherit',
+      env: { ...process.env, AGENTWATCH_LOG_DIR: rootDir }
     }
   );
 

@@ -216,6 +216,64 @@
       "wholeWord": false,
       "level": "hard",
       "enabled": true
+    },
+    {
+      "text": "rmSync",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "child_process",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "execSync",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "spawn",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "eval(",
+      "wholeWord": false,
+      "level": "hard",
+      "enabled": true
+    },
+    {
+      "text": "writeFileSync",
+      "wholeWord": false,
+      "level": "slow",
+      "delay": 10,
+      "enabled": true
+    },
+    {
+      "text": "appendFileSync",
+      "wholeWord": false,
+      "level": "slow",
+      "delay": 10,
+      "enabled": true
+    },
+    {
+      "text": "renameSync",
+      "wholeWord": false,
+      "level": "slow",
+      "delay": 10,
+      "enabled": true
+    },
+    {
+      "text": "copyFileSync",
+      "wholeWord": false,
+      "level": "slow",
+      "delay": 10,
+      "enabled": true
     }
   ],
   "allow": [

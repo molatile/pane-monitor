@@ -16,6 +16,39 @@ function isSeparatorLine(line) {
   return /^[─\-_=~*—\s]+$/.test(trimmed) && trimmed.replace(/\s+/g, '').length >= 3;
 }
 
+/**
+ * Checks if a string line is a navigation or status footer line.
+ * Matches standard Antigravity navigation footers, arrows, "/ Navigate",
+ * status indicators (accept-edits, Gemini model, etc.), and shortcuts.
+ */
+function isFooterLine(line, footerPrefix) {
+  if (!line) return false;
+  const text = typeof line === 'string' ? line : (line && line.text ? line.text : '');
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  if (footerPrefix) {
+    if (trimmed.startsWith(footerPrefix) || new RegExp(footerPrefix, 'i').test(trimmed)) {
+      return true;
+    }
+  }
+
+  // Navigation commands & shortcuts
+  if (/^(?:[↑^]?\/[↓v]?\s*Navigate|\bnavigate\b|use\s+arrow\s+keys|press\s+enter|esc\s+to\s+cancel|tab\s+amend|ctrl\+[a-z]\s+edit|\? for shortcuts)/i.test(trimmed)) {
+    return true;
+  }
+
+  if (/\bNavigate\b/i.test(trimmed) && (/\bAmend\b/i.test(trimmed) || /\bctrl\+[a-z]\b/i.test(trimmed) || /\/ Navigate\b/i.test(trimmed))) {
+    return true;
+  }
+
+  if (/^esc\s+to\s+cancel/i.test(trimmed)) {
+    return true;
+  }
+
+  return false;
+}
+
 const loggedUnknownSignatures = new Set();
 
 /**
@@ -169,35 +202,30 @@ function extractPromptFromScreen(screenLines, profile) {
     let qIndex = -1;
     let reqIndex = -1;
 
+    for (let i = lineTexts.length - 1; i >= 0; i--) {
+      const tr = lineTexts[i].trim();
+      // Agent reply text never counts (e.g. lines starting with markdown bullets/lists)
+      if (/^[*•\-+#]/.test(tr)) {
+        continue;
+      }
+      if (questionRegex.test(tr)) {
+        qIndex = i;
+        break;
+      }
+    }
+
+    if (qIndex === -1) {
+      continue;
+    }
+
     if (contextStartPattern) {
       const csRegex = new RegExp(contextStartPattern, 'i');
-      for (let i = lineTexts.length - 1; i >= 0; i--) {
+      for (let i = qIndex - 1; i >= Math.max(0, qIndex - 40); i--) {
+        if (isSeparatorLine(lineTexts[i])) break;
         if (csRegex.test(lineTexts[i])) {
           reqIndex = i;
           break;
         }
-      }
-      if (reqIndex === -1) {
-        continue;
-      }
-      for (let i = reqIndex; i < lineTexts.length; i++) {
-        if (questionRegex.test(lineTexts[i])) {
-          qIndex = i;
-          break;
-        }
-      }
-      if (qIndex === -1) {
-        continue;
-      }
-    } else {
-      for (let i = lineTexts.length - 1; i >= 0; i--) {
-        if (questionRegex.test(lineTexts[i].trim())) {
-          qIndex = i;
-          break;
-        }
-      }
-      if (qIndex === -1) {
-        continue;
       }
     }
 
@@ -215,20 +243,43 @@ function extractPromptFromScreen(screenLines, profile) {
       contextLines.unshift(l);
     }
 
-    // Command lines (for command type with context start)
+    // Command lines (for command type with context start or visible command block)
     let commandSpaced = '';
     let commandCompact = '';
-    if (reqIndex !== -1) {
-      const rawCmdLines = lineTexts.slice(reqIndex + 1, qIndex);
-      const qLine = lineTexts[qIndex];
-      const match = qLine.match(questionRegex);
-      if (match && match.index > 0) {
-        rawCmdLines.push(qLine.slice(0, match.index));
-      }
+    let hasVisibleCommandBlock = false;
+    let rawCmdLines = [];
 
-      const cmdLineTexts = rawCmdLines
-        .map(l => (typeof l === 'string' ? l.trimEnd() : ''))
-        .filter(t => t.trim() !== '');
+    const promptTypeName = pt.name || 'command';
+
+    if (reqIndex !== -1) {
+      rawCmdLines = lineTexts.slice(reqIndex + 1, qIndex);
+      hasVisibleCommandBlock = true;
+    } else if (promptTypeName === 'command') {
+      // Check if there are command lines above qIndex (e.g. when context start is scrolled off)
+      for (let i = qIndex - 1; i >= 0; i--) {
+        const lt = lineTexts[i];
+        const tr = lt.trim();
+        if (isSeparatorLine(tr) || /^Command\b/i.test(tr) || /^[○●]\s+(?:Thought|Ran|Explored)\b/i.test(tr)) {
+          break;
+        }
+        rawCmdLines.unshift(lt);
+      }
+      if (rawCmdLines.some(l => l.trim() !== '')) {
+        hasVisibleCommandBlock = true;
+      }
+    }
+
+    const qLine = lineTexts[qIndex];
+    const match = qLine.match(questionRegex);
+    if (match && match.index > 0) {
+      rawCmdLines.push(qLine.slice(0, match.index));
+    }
+
+    const cmdLineTexts = rawCmdLines
+      .map(l => (typeof l === 'string' ? l.trimEnd() : ''))
+      .filter(t => t.trim() !== '');
+
+    if (cmdLineTexts.length > 0) {
       commandSpaced = cmdLineTexts
         .map(t => t.trim())
         .join(' ')
@@ -239,52 +290,54 @@ function extractPromptFromScreen(screenLines, profile) {
         .join('');
     }
 
-    const qLine = lineTexts[qIndex];
-    const match = qLine.match(questionRegex);
     const question = match ? qLine.slice(match.index).trim() : qLine.trim();
 
     // Option parsing
     const rawOptions = [];
     let currentOption = null;
     let footerSeen = false;
+    let hasSelectionMarker = false;
 
     for (let i = qIndex + 1; i < lineTexts.length; i++) {
       const lineText = lineTexts[i].trimEnd();
       const trimmed = lineText.trim();
 
-      if (footerPrefix) {
-        if (
-          trimmed.startsWith(footerPrefix) ||
-          new RegExp(footerPrefix, 'i').test(trimmed) ||
-          (footerPrefix.includes('Navigate') && /^[↑^]\/[↓v]?\s*Navigate/i.test(trimmed)) ||
-          /^(?:[↑^]\/[↓v]?\s*Navigate|navigate\b|use\s+arrow\s+keys|press\s+enter|esc\s+to\s+cancel|tab\s+amend|ctrl\+[a-z]\s+edit)/i.test(trimmed)
-        ) {
-          footerSeen = true;
-          break;
-        }
-      } else {
-        if (/^(?:[↑^]\/[↓v]?\s*Navigate|navigate\b|use\s+arrow\s+keys|press\s+enter|esc\s+to\s+cancel)/i.test(trimmed)) {
-          footerSeen = true;
-          break;
-        }
-        if (isSeparatorLine(trimmed)) {
-          break;
-        }
+      if (/^\s*>\s*\d+\./.test(lineText) || /^\s*>\s*\[/.test(lineText)) {
+        hasSelectionMarker = true;
       }
 
-      if (trimmed.startsWith('esc to cancel')) {
-        continue;
+      if (isFooterLine(trimmed, footerPrefix)) {
+        footerSeen = true;
+        break;
       }
 
-      const match = lineText.match(optionRegex);
-      if (match) {
-        const key = match[1];
-        const num = parseInt(key, 10);
-        const optText = match[2] ? match[2].trim() : '';
-        currentOption = { key, number: num, text: optText };
+      if (isSeparatorLine(trimmed)) {
+        break;
+      }
+
+      const optMatch = lineText.match(optionRegex);
+      const num = optMatch ? parseInt(optMatch[1], 10) : NaN;
+      const isSequential = currentOption ? (num === currentOption.number + 1) : (num === 1);
+      // Code lines at column 0 inside options never create fake options
+      const isColumnZeroCode = optMatch && currentOption !== null && !/^\s+/.test(lineText) && !/^\s*>/.test(lineText);
+
+      if (optMatch && isSequential && !isColumnZeroCode) {
+        const key = optMatch[1];
+        const hasMarker = /^\s*>\s*/.test(lineText);
+        const optText = optMatch[2] ? optMatch[2].trim() : '';
+        currentOption = { key, number: num, text: optText, hasMarker };
         rawOptions.push(currentOption);
       } else if (currentOption) {
         if (trimmed === '') {
+          // Lookahead: if remaining lines are footer or separator or end of screen, don't append blank line
+          let nextNonEmpty = '';
+          for (let k = i + 1; k < lineTexts.length; k++) {
+            const kt = lineTexts[k].trim();
+            if (kt !== '') { nextNonEmpty = kt; break; }
+          }
+          if (!nextNonEmpty || isFooterLine(nextNonEmpty, footerPrefix) || isSeparatorLine(nextNonEmpty)) {
+            continue;
+          }
           continue;
         }
         currentOption.text += ' ' + trimmed;
@@ -299,6 +352,55 @@ function extractPromptFromScreen(screenLines, profile) {
     // Must have at least minOptions
     if (rawOptions.length < minOptions) {
       continue;
+    }
+
+    // If command block was not visible above question, extract command text from option texts
+    if (!commandSpaced && promptTypeName === 'command') {
+      for (const opt of rawOptions) {
+        const optText = opt.text || '';
+        const m = optText.match(/commands that start with (['"])([\s\S]*)/i);
+        if (m) {
+          const quoteChar = m[1];
+          let inner = m[2];
+          inner = inner.replace(/\s*\(Persist to settings\.json\)\s*$/i, '');
+          if (inner.endsWith(quoteChar)) {
+            inner = inner.slice(0, -quoteChar.length);
+          }
+          inner = inner.trim();
+          if (inner) {
+            commandSpaced = inner.replace(/\s+/g, ' ');
+            commandCompact = inner.replace(/\s+/g, '');
+            break;
+          }
+        }
+      }
+    }
+
+    // Check command completeness (Requirement 3)
+    let commandComplete = true;
+    if (promptTypeName === 'command') {
+      if (!hasVisibleCommandBlock) {
+        commandComplete = false; // Missing command block above question
+      }
+      if (
+        commandSpaced.includes('...') ||
+        commandSpaced.includes('{...') ||
+        commandSpaced.includes('…') ||
+        rawCmdLines.some(l => l.includes('...') || l.includes('{...') || l.includes('…'))
+      ) {
+        commandComplete = false;
+      }
+      for (const opt of rawOptions) {
+        const t = opt.text || '';
+        if (
+          /\.\.\.['"](?:\s*\(Persist to settings\.json\))?\s*$/i.test(t) ||
+          /…['"](?:\s*\(Persist to settings\.json\))?\s*$/i.test(t) ||
+          /\.\.\.\s*$/i.test(t) ||
+          /…\s*$/i.test(t)
+        ) {
+          commandComplete = false;
+        }
+      }
     }
 
     // Consecutive numbering normalization
@@ -330,8 +432,6 @@ function extractPromptFromScreen(screenLines, profile) {
       };
     });
 
-    const promptTypeName = pt.name || 'command';
-
     if (promptTypeName === 'file_edit') {
       const targetFile = extractTargetFilePath(contextLines);
       const fileName = targetFile ? path.basename(targetFile.replace(/\\/g, '/')) : null;
@@ -342,10 +442,12 @@ function extractPromptFromScreen(screenLines, profile) {
         command: targetFile || '',
         commandSpaced: targetFile || '',
         commandCompact: targetFile ? targetFile.replace(/\s+/g, '') : '',
+        commandComplete: true,
         question,
         options,
         contextLines,
-        footerSeen: true
+        footerSeen: true,
+        hasSelectionMarker: Boolean(hasSelectionMarker)
       };
     }
 
@@ -354,10 +456,12 @@ function extractPromptFromScreen(screenLines, profile) {
       command: commandSpaced,
       commandSpaced,
       commandCompact,
+      commandComplete,
       question,
       options,
       contextLines,
-      footerSeen: true
+      footerSeen: true,
+      hasSelectionMarker: Boolean(hasSelectionMarker)
     };
   }
 
@@ -377,16 +481,39 @@ function extractPromptFromScreen(screenLines, profile) {
       }
       const unkOptions = [];
       let curOpt = null;
+      let unkHasSelectionMarker = false;
+      let unkFooterSeen = false;
       for (let j = i + 1; j < lineTexts.length; j++) {
         const lText = lineTexts[j].trimEnd();
         const tr = lText.trim();
+        if (/^\s*>\s*\d+\./.test(lText) || /^\s*>\s*\[/.test(lText)) {
+          unkHasSelectionMarker = true;
+        }
         if (isSeparatorLine(tr)) break;
+        if (isFooterLine(tr)) {
+          unkFooterSeen = true;
+          break;
+        }
         const optM = lText.match(/^\s*>?\s*(\d+)\.\s+(.*)$/);
-        if (optM) {
-          curOpt = { key: optM[1], number: parseInt(optM[1], 10), text: optM[2].trim() };
+        const num = optM ? parseInt(optM[1], 10) : NaN;
+        const isSeq = curOpt ? (num === curOpt.number + 1) : (num === 1);
+        const isCol0 = optM && curOpt !== null && !/^\s+/.test(lText) && !/^\s*>/.test(lText);
+
+        if (optM && isSeq && !isCol0) {
+          curOpt = { key: optM[1], number: num, text: optM[2].trim() };
           unkOptions.push(curOpt);
         } else if (curOpt) {
-          if (tr === '') break;
+          if (tr === '') {
+            let nextNonEmpty = '';
+            for (let k = j + 1; k < lineTexts.length; k++) {
+              const kt = lineTexts[k].trim();
+              if (kt !== '') { nextNonEmpty = kt; break; }
+            }
+            if (!nextNonEmpty || isFooterLine(nextNonEmpty) || isSeparatorLine(nextNonEmpty)) {
+              continue;
+            }
+            continue;
+          }
           curOpt.text += ' ' + tr;
         }
       }
@@ -414,10 +541,12 @@ function extractPromptFromScreen(screenLines, profile) {
           question: trimmed,
           options,
           contextLines,
-          footerSeen: true,
+          footerSeen: Boolean(unkFooterSeen),
+          hasSelectionMarker: Boolean(unkHasSelectionMarker),
           command: '',
           commandSpaced: '',
-          commandCompact: ''
+          commandCompact: '',
+          commandComplete: false
         };
       }
     }
@@ -467,7 +596,6 @@ function isPromptLive(detected, screenLines, profile) {
   let hasFooterLine = false;
 
   const footerPattern = (profile && (profile.footerPattern || (profile.prompt && (profile.prompt.footerPattern || profile.prompt.footerPrefix)))) || '↑/↓ Navigate';
-  const footerRegex = new RegExp(footerPattern, 'i');
 
   let lastPromptLineIndex = -1;
 
@@ -479,13 +607,20 @@ function isPromptLive(detected, screenLines, profile) {
       hasSelectionMarker = true;
     }
 
-    if (
-      footerRegex.test(trimmed) ||
-      (footerPattern.includes('Navigate') && /^[↑^]\/[↓v]?\s*Navigate/i.test(trimmed)) ||
-      /^(?:[↑^]\/[↓v]?\s*Navigate|navigate\b|use\s+arrow\s+keys|press\s+enter|esc\s+to\s+cancel)/i.test(trimmed)
-    ) {
+    if (isFooterLine(trimmed, footerPattern)) {
       hasFooterLine = true;
       lastPromptLineIndex = Math.max(lastPromptLineIndex, i);
+    }
+  }
+
+  // If the line immediately following the footer line carries extra status words (e.g. "accept-edits", model name)
+  if (lastPromptLineIndex !== -1 && lastPromptLineIndex + 1 < lineTexts.length) {
+    const nextTrimmed = lineTexts[lastPromptLineIndex + 1].trim();
+    if (
+      /^(?:esc\s+to\s+cancel|accept-edits|\? for shortcuts)/i.test(nextTrimmed) ||
+      /(?:accept-edits|Gemini|Flash|high|low|pro)/i.test(nextTrimmed)
+    ) {
+      lastPromptLineIndex = lastPromptLineIndex + 1;
     }
   }
 
@@ -512,7 +647,7 @@ function isPromptLive(detected, screenLines, profile) {
           const kTrim = lineTexts[k].trim();
           if (kTrim === '') break;
           if (/^\s*>?\s*\d+\./.test(lineTexts[k])) break;
-          if (footerRegex.test(kTrim)) {
+          if (isFooterLine(kTrim, footerPattern)) {
             promptEndLineIndex = k;
             break;
           }
@@ -545,6 +680,7 @@ module.exports = {
   getSelectedOptionNumberFromScreen,
   isPromptLive,
   isSeparatorLine,
+  isFooterLine,
   extractTargetFilePath,
   appendUnknownPromptSample
 };

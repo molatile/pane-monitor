@@ -667,6 +667,8 @@ function createRow(session) {
   // Clicking row selects agent to show its history, or unselects if already selected
   row.addEventListener('click', (e) => {
     if (editingSessionKey === key) return;
+    if (e.target && typeof e.target.closest === 'function' && (e.target.closest('.card-copy-btn') || e.target.closest('.prompt-copy-btn'))) return;
+    if (typeof window !== 'undefined' && window.getSelection && window.getSelection().toString().trim().length > 0) return;
     if (selectedAgentKey === key) {
       unselectAgent();
     } else {
@@ -863,12 +865,23 @@ function createRow(session) {
         decisionText = 'needs you because: unrecognized prompt';
       }
     }
-    promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-type-tag">[${escapeHtml(typeLabel)}]</span> <span class="prompt-cmd">${escapeHtml(targetText)}</span> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
+    promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-type-tag">[${escapeHtml(typeLabel)}]</span> <span class="prompt-cmd">${escapeHtml(targetText)}</span> <button type="button" class="prompt-copy-btn" title="Copy prompt command to clipboard">Copy</button> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
     promptEl.style.display = '';
   } else {
     promptEl.innerHTML = '';
     promptEl.style.display = 'none';
   }
+  promptEl.addEventListener('click', (e) => {
+    const btn = e.target && typeof e.target.closest === 'function' ? e.target.closest('.prompt-copy-btn') : null;
+    if (btn) {
+      e.stopPropagation();
+      const cmdSpan = typeof promptEl.querySelector === 'function' ? promptEl.querySelector('.prompt-cmd') : null;
+      const textToCopy = cmdSpan ? cmdSpan.textContent : '';
+      copyTextToClipboard(textToCopy);
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    }
+  });
   row.appendChild(promptEl);
 
   setupDragAndDrop(row, key);
@@ -1013,7 +1026,7 @@ function updateRow(entry, session) {
         decisionText = 'needs you because: unrecognized prompt';
       }
     }
-    entry.promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-type-tag">[${escapeHtml(typeLabel)}]</span> <span class="prompt-cmd">${escapeHtml(targetText)}</span> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
+    entry.promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-type-tag">[${escapeHtml(typeLabel)}]</span> <span class="prompt-cmd">${escapeHtml(targetText)}</span> <button type="button" class="prompt-copy-btn" title="Copy prompt command to clipboard">Copy</button> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
     entry.promptEl.style.display = '';
   } else {
     entry.promptEl.innerHTML = '';
@@ -1140,6 +1153,14 @@ function cancelRename() {
 function setupDragAndDrop(row, sessionKey) {
   row.addEventListener('dragstart', (e) => {
     if (editingSessionKey !== null) {
+      e.preventDefault();
+      return;
+    }
+    if (typeof window !== 'undefined' && window.getSelection && window.getSelection().toString().trim().length > 0) {
+      e.preventDefault();
+      return;
+    }
+    if (e.target && typeof e.target.closest === 'function' && (e.target.closest('.card-copy-btn') || e.target.closest('.prompt-copy-btn') || e.target.closest('.session-prompt-line'))) {
       e.preventDefault();
       return;
     }
@@ -1506,13 +1527,45 @@ function renderHistory(events) {
 }
 
 /**
+ * Helper to safely copy text to system clipboard
+ */
+function copyTextToClipboard(text) {
+  if (!text) return;
+  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    navigator.clipboard.writeText(text).catch(() => {
+      fallbackExecCopy(text);
+    });
+    return;
+  }
+  fallbackExecCopy(text);
+}
+
+function fallbackExecCopy(text) {
+  if (typeof document === 'undefined' || !document.body) return;
+  try {
+    const el = document.createElement('textarea');
+    el.value = text;
+    el.style.position = 'fixed';
+    el.style.opacity = '0';
+    document.body.appendChild(el);
+    if (typeof el.select === 'function') {
+      el.select();
+    }
+    if (typeof document.execCommand === 'function') {
+      document.execCommand('copy');
+    }
+    document.body.removeChild(el);
+  } catch (e) {}
+}
+
+/**
  * Creates a readable History Card for a prompt.
  */
 function createHistoryCard(prompt, timeFormat) {
   const card = document.createElement('div');
   card.className = 'history-card';
 
-  // Card header (Time and duration on screen)
+  // Card header (Time, Copy button, and duration on screen)
   const header = document.createElement('div');
   header.className = 'card-header';
 
@@ -1520,11 +1573,25 @@ function createHistoryCard(prompt, timeFormat) {
   timeEl.className = 'card-time';
   timeEl.textContent = formatDisplayTime(prompt.time, timeFormat, false);
 
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'card-copy-btn';
+  copyBtn.title = 'Copy prompt or command to clipboard';
+  copyBtn.textContent = 'Copy';
+  copyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const toCopy = prompt.command || prompt.question || '';
+    copyTextToClipboard(toCopy);
+    copyBtn.textContent = 'Copied!';
+    setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+  });
+
   const durationEl = document.createElement('span');
   durationEl.className = 'card-duration';
   durationEl.textContent = `On screen: ${prompt.durationStr}`;
 
   header.appendChild(timeEl);
+  header.appendChild(copyBtn);
   header.appendChild(durationEl);
   card.appendChild(header);
 
@@ -2178,9 +2245,12 @@ const testerDecisionDetails = getEl('tester-decision-details');
 const looseningModal = getEl('loosening-modal');
 const looseningItemsList = getEl('loosening-items-list');
 const persistWarningBox = getEl('persist-warning-box');
+const looseningWarningText = getEl('loosening-warning-text');
+const looseningTypePrompt = getEl('loosening-type-prompt');
 const looseningPersistInput = getEl('loosening-persist-input');
 const looseningConfirmBtn = getEl('loosening-confirm-btn');
 const looseningCancelBtn = getEl('loosening-cancel-btn');
+let currentRequiredLooseningWord = null;
 
 const restoreModal = getEl('restore-modal');
 const restoreBackupSelect = getEl('restore-backup-select');
@@ -2202,8 +2272,9 @@ function generateRulePreview(rule) {
   }
   const cmd = rule.commandStartsWith ? ` for commands that start with "${rule.commandStartsWith}"` : (types ? '' : ' for all commands');
   const persist = rule.allowPersist ? ' (allows persist)' : '';
+  const trunc = rule.allowTruncatedCommand ? ' (allows truncated command)' : '';
   const disabled = rule.enabled === false ? ' [Disabled]' : '';
-  return `Presses the option that ${starts}${ends}${types}${cmd}${persist}${disabled}.`;
+  return `Presses the option that ${starts}${ends}${types}${cmd}${persist}${trunc}${disabled}.`;
 }
 
 /**
@@ -2614,7 +2685,47 @@ function renderOptionRules() {
     cmdGroup.appendChild(cmdLabel);
     cmdGroup.appendChild(cmdInput);
     advDetails.appendChild(cmdGroup);
-    if (rule.commandStartsWith) {
+
+    // Allow Truncated Command field (optional, under Advanced)
+    const truncGroup = document.createElement('div');
+    truncGroup.className = 'form-group';
+    truncGroup.style.marginTop = '8px';
+
+    const truncLabel = document.createElement('label');
+    truncLabel.className = 'checkbox-label';
+    truncLabel.style.display = 'flex';
+    truncLabel.style.alignItems = 'center';
+    truncLabel.style.gap = '6px';
+    truncLabel.style.cursor = 'pointer';
+
+    const truncCheckbox = document.createElement('input');
+    truncCheckbox.type = 'checkbox';
+    truncCheckbox.checked = Boolean(rule.allowTruncatedCommand);
+    truncCheckbox.addEventListener('change', () => {
+      rule.allowTruncatedCommand = truncCheckbox.checked;
+      previewEl.textContent = generateRulePreview(rule);
+      updateRulesTopBar();
+    });
+
+    const truncText = document.createElement('span');
+    truncText.textContent = 'Allow Truncated Command';
+    truncText.style.fontWeight = '500';
+
+    truncLabel.appendChild(truncCheckbox);
+    truncLabel.appendChild(truncText);
+    truncGroup.appendChild(truncLabel);
+
+    const truncDesc = document.createElement('p');
+    truncDesc.className = 'field-help-text';
+    truncDesc.style.fontSize = '11px';
+    truncDesc.style.color = 'var(--color-text-muted, #94a3b8)';
+    truncDesc.style.margin = '2px 0 0 20px';
+    truncDesc.textContent = 'Apply this rule even if the command text was cut off on screen and cannot be fully checked.';
+    truncGroup.appendChild(truncDesc);
+
+    advDetails.appendChild(truncGroup);
+
+    if (rule.commandStartsWith || rule.allowTruncatedCommand) {
       advDetails.open = true;
     }
     fieldsGrid.appendChild(advDetails);
@@ -3027,6 +3138,7 @@ if (addOptionRuleBtn) {
       startsWith: 'Yes, allow',
       commandStartsWith: '',
       allowPersist: false,
+      allowTruncatedCommand: false,
       enabled: true
     });
     renderRulesView();
@@ -3152,10 +3264,24 @@ function openLooseningModal(loosening) {
     looseningItemsList.appendChild(li);
   });
 
-  if (loosening.requiresPersistConfirmation) {
+  const requiredWord = loosening.requiredWord || (loosening.requiresPersistConfirmation ? 'PERSIST' : (loosening.requiresTruncatedConfirmation ? 'TRUNCATED' : null));
+  currentRequiredLooseningWord = requiredWord;
+
+  if (requiredWord) {
     if (persistWarningBox) persistWarningBox.classList.remove('hidden');
+    if (looseningWarningText) {
+      if (requiredWord === 'TRUNCATED') {
+        looseningWarningText.innerHTML = '<strong>Warning:</strong> One or more rules allow truncated commands that cannot be fully verified.';
+      } else {
+        looseningWarningText.innerHTML = '<strong>Warning:</strong> One or more rules allow persisting permissions or match persist options.';
+      }
+    }
+    if (looseningTypePrompt) {
+      looseningTypePrompt.innerHTML = `To confirm, type <strong>${requiredWord}</strong> below:`;
+    }
     if (looseningPersistInput) {
       looseningPersistInput.value = '';
+      looseningPersistInput.placeholder = `Type ${requiredWord} to confirm`;
       looseningPersistInput.focus();
     }
     if (looseningConfirmBtn) {
@@ -3173,7 +3299,11 @@ function openLooseningModal(loosening) {
 
 if (looseningPersistInput && looseningConfirmBtn) {
   looseningPersistInput.addEventListener('input', () => {
-    looseningConfirmBtn.disabled = looseningPersistInput.value.trim() !== 'PERSIST';
+    if (!currentRequiredLooseningWord) {
+      looseningConfirmBtn.disabled = false;
+      return;
+    }
+    looseningConfirmBtn.disabled = looseningPersistInput.value.trim() !== currentRequiredLooseningWord;
   });
 }
 
@@ -3189,6 +3319,7 @@ if (looseningConfirmBtn) {
             rulesBackups = res.backups || [];
             if (looseningModal) looseningModal.classList.add('hidden');
             pendingLooseningSave = null;
+            currentRequiredLooseningWord = null;
             renderRulesView();
           } else {
             alert(`Error saving rules: ${res ? res.error : 'Unknown error'}`);
@@ -3210,6 +3341,7 @@ if (looseningConfirmBtn) {
             if (resetFolderRulesBtn) resetFolderRulesBtn.style.display = 'inline-block';
             if (looseningModal) looseningModal.classList.add('hidden');
             pendingLooseningSave = null;
+            currentRequiredLooseningWord = null;
             renderRulesView();
           } else {
             alert(`Error saving folder rules: ${res ? res.error : 'Unknown error'}`);
@@ -3224,6 +3356,7 @@ if (looseningCancelBtn && looseningModal) {
   looseningCancelBtn.addEventListener('click', () => {
     looseningModal.classList.add('hidden');
     pendingLooseningSave = null;
+    currentRequiredLooseningWord = null;
   });
 }
 

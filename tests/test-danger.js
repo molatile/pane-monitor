@@ -120,13 +120,22 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
     { text: 'password', wholeWord: false },
     { text: 'token', wholeWord: false },
     { text: 'credentials', wholeWord: false },
-    { text: 'private key', wholeWord: false }
+    { text: 'private key', wholeWord: false },
+    { text: 'rmSync', wholeWord: false, level: 'hard' },
+    { text: 'child_process', wholeWord: false, level: 'hard' },
+    { text: 'execSync', wholeWord: false, level: 'hard' },
+    { text: 'spawn', wholeWord: false, level: 'hard' },
+    { text: 'eval(', wholeWord: false, level: 'hard' },
+    { text: 'writeFileSync', wholeWord: false, level: 'slow' },
+    { text: 'appendFileSync', wholeWord: false, level: 'slow' },
+    { text: 'renameSync', wholeWord: false, level: 'slow' },
+    { text: 'copyFileSync', wholeWord: false, level: 'slow' }
   ];
 
-  test('Danger list has exactly 42 seeded entries', () => {
-    assert.strictEqual(expectedSeededWords.length, 42);
-    assert.strictEqual(DEFAULT_DANGER_LIST.length, 42);
-    assert.strictEqual(dangerList.length, 42);
+  test('Danger list has exactly 51 seeded entries', () => {
+    assert.strictEqual(expectedSeededWords.length, 51);
+    assert.strictEqual(DEFAULT_DANGER_LIST.length, 51);
+    assert.strictEqual(dangerList.length, 51);
   });
 
   for (const item of expectedSeededWords) {
@@ -142,10 +151,18 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
       assert.strictEqual(qMatched, true, `Entry "${item.text}" must match in question`);
 
       // 3. evaluatePrompt triggers danger
-      const decision = evaluatePrompt(prompt, { danger: [item], allow: DEFAULT_RULES.allow, deny: [] });
-      assert.strictEqual(decision.action, 'needs_user');
-      assert.strictEqual(decision.danger, true);
-      assert.strictEqual(decision.reason, `DANGER: matched '${item.text}'`);
+      if (item.level === 'slow') {
+        const approveRule = { name: 'test-allow', startsWith: 'Yes, run', enabled: true };
+        const decisionSlow = evaluatePrompt(prompt, { danger: [item], optionRules: [approveRule], deny: [] });
+        assert.strictEqual(decisionSlow.action, 'would_approve');
+        assert.strictEqual(decisionSlow.delay, 10);
+        assert.strictEqual(decisionSlow.slowDanger, item.text);
+      } else {
+        const decision = evaluatePrompt(prompt, { danger: [item], allow: DEFAULT_RULES.allow, deny: [] });
+        assert.strictEqual(decision.action, 'needs_user');
+        assert.strictEqual(decision.danger, true);
+        assert.strictEqual(decision.reason, `DANGER: matched '${item.text}'`);
+      }
     });
   }
 
@@ -456,7 +473,7 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
 
   test('Non-array danger property ignored with warning, returns defaults', () => {
     const validated = validateDangerList('not-an-array');
-    assert.strictEqual(validated.length, 42);
+    assert.strictEqual(validated.length, 51);
   });
 
   test('Corrupted rules file does not crash loadRules and falls back to defaults', () => {
@@ -467,7 +484,7 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
       const loaded = loadRules(tmpBadRules);
       assert(loaded);
       assert(Array.isArray(loaded.danger));
-      assert.strictEqual(loaded.danger.length, 42);
+      assert.strictEqual(loaded.danger.length, 51);
     } finally {
       try { fs.unlinkSync(tmpBadRules); } catch (e) {}
     }
@@ -501,8 +518,8 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
 
       const fullOutput = outputLines.join('');
       assert(
-        fullOutput.includes('agentwatch: danger list has 42 entries'),
-        `Startup output must include "agentwatch: danger list has 42 entries", got: ${fullOutput}`
+        fullOutput.includes('agentwatch: danger list has 51 entries'),
+        `Startup output must include "agentwatch: danger list has 51 entries", got: ${fullOutput}`
       );
       if (monitor) monitor.cleanup();
     } finally {

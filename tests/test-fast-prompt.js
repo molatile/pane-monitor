@@ -23,7 +23,8 @@ const spikeProcess = spawn(
   [path.join(rootDir, 'spike.js'), 'node', path.join(rootDir, 'tests', 'mock-fast-prompt-app.js')],
   {
     cwd: rootDir,
-    stdio: 'inherit'
+    stdio: 'inherit',
+    env: { ...process.env, AGENTWATCH_LOG_DIR: rootDir }
   }
 );
 

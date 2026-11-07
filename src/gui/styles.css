@@ -132,6 +132,34 @@
   user-select: none;
 }
 
+/* Enable text selection on prompts, commands, options, code, and readable text */
+.card-command,
+.card-question,
+.card-options,
+.option-text,
+.card-footer,
+.card-time,
+.card-decision,
+.session-prompt-line,
+.prompt-cmd,
+.prompt-decision,
+.session-summary-line,
+.history-card,
+.history-summary,
+.session-name,
+.session-folder,
+.rule-card,
+.rule-preview,
+.tester-output,
+.rule-test-preview,
+pre,
+code,
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 body {
   font-family: var(--font-sans);
   background-color: var(--bg-color);
@@ -968,6 +996,39 @@ details[open] .past-agents-summary::before {
   color: var(--text-muted);
   font-size: 10px;
   font-family: var(--font-mono);
+}
+
+.card-copy-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 1px 6px;
+  cursor: pointer;
+  margin-left: auto;
+  margin-right: 6px;
+  transition: all 0.15s ease;
+}
+
+.prompt-copy-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 1px 5px;
+  cursor: pointer;
+  margin: 0 4px;
+  transition: all 0.15s ease;
+  vertical-align: middle;
+}
+
+.card-copy-btn:hover,
+.prompt-copy-btn:hover {
+  background-color: var(--row-hover-bg);
+  color: var(--text-primary);
+  border-color: var(--text-muted);
 }
 
 .card-question {

@@ -155,7 +155,18 @@ const DEFAULT_DANGER_LIST = [
   { text: 'password', wholeWord: false },
   { text: 'token', wholeWord: false },
   { text: 'credentials', wholeWord: false },
-  { text: 'private key', wholeWord: false }
+  { text: 'private key', wholeWord: false },
+  // Hard level script danger entries (seed defaults)
+  { text: 'rmSync', wholeWord: false, level: 'hard', enabled: true },
+  { text: 'child_process', wholeWord: false, level: 'hard', enabled: true },
+  { text: 'execSync', wholeWord: false, level: 'hard', enabled: true },
+  { text: 'spawn', wholeWord: false, level: 'hard', enabled: true },
+  { text: 'eval(', wholeWord: false, level: 'hard', enabled: true },
+  // Slow level script danger entries (10 s countdown, vetoable)
+  { text: 'writeFileSync', wholeWord: false, level: 'slow', delay: 10, enabled: true },
+  { text: 'appendFileSync', wholeWord: false, level: 'slow', delay: 10, enabled: true },
+  { text: 'renameSync', wholeWord: false, level: 'slow', delay: 10, enabled: true },
+  { text: 'copyFileSync', wholeWord: false, level: 'slow', delay: 10, enabled: true }
 ];
 
 const DEFAULT_RULES = {
@@ -254,7 +265,7 @@ function validateOptionRules(rawList) {
     return (DEFAULT_RULES.optionRules || []).slice();
   }
 
-  const ALLOWED_OPTION_RULE_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist', 'promptTypes']);
+  const ALLOWED_OPTION_RULE_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist', 'allowTruncatedCommand', 'promptTypes']);
   const validEntries = [];
 
   for (const item of rawList) {
@@ -336,7 +347,8 @@ function validateOptionRules(rawList) {
       commandStartsWith: item.commandStartsWith !== undefined ? item.commandStartsWith.trim() : undefined,
       promptTypes: promptTypes,
       enabled: item.enabled !== undefined ? Boolean(item.enabled) : true,
-      allowPersist: item.allowPersist !== undefined ? Boolean(item.allowPersist) : false
+      allowPersist: item.allowPersist !== undefined ? Boolean(item.allowPersist) : false,
+      allowTruncatedCommand: item.allowTruncatedCommand !== undefined ? Boolean(item.allowTruncatedCommand) : false
     });
   }
 
@@ -667,8 +679,9 @@ function validateDangerList(rawList) {
     return DEFAULT_DANGER_LIST.map(e => ({
       text: e.text,
       wholeWord: Boolean(e.wholeWord),
-      level: 'hard',
-      enabled: true
+      level: e.level === 'slow' ? 'slow' : 'hard',
+      delay: e.level === 'slow' ? (typeof e.delay === 'number' && e.delay > 0 ? e.delay : 10) : undefined,
+      enabled: e.enabled !== undefined ? Boolean(e.enabled) : true
     }));
   }
 
@@ -775,6 +788,27 @@ function checkDangerMatch(prompt, dangerList) {
   } else {
     cmdSpaced = prompt.commandSpaced || prompt.command || '';
     cmdCompact = (prompt.commandCompact || cmdSpaced.replace(/\s+/g, '')).replace(/\s+/g, '');
+
+    // Include any command code extracted from option texts (commands that start with '...')
+    if (Array.isArray(prompt.options)) {
+      for (const opt of prompt.options) {
+        const optText = opt.text || '';
+        const m = optText.match(/commands that start with (['"])([\s\S]*)/i);
+        if (m) {
+          const quoteChar = m[1];
+          let inner = m[2];
+          inner = inner.replace(/\s*\(Persist to settings\.json\)\s*$/i, '');
+          if (inner.endsWith(quoteChar)) {
+            inner = inner.slice(0, -quoteChar.length);
+          }
+          inner = inner.trim();
+          if (inner) {
+            cmdSpaced += ' ' + inner.replace(/\s+/g, ' ');
+            cmdCompact += inner.replace(/\s+/g, '');
+          }
+        }
+      }
+    }
   }
 
   const matched = [];
@@ -1067,6 +1101,21 @@ function resolveWinningOptionRule(enabledOptionRules, prompt, ruleListType, rule
       };
     }
 
+    // Truncated command safety check (Requirement 4)
+    if (prompt.commandComplete === false && !rule.allowTruncatedCommand) {
+      const reason = "the command is cut off on screen, so it can't be fully checked";
+      const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
+      return {
+        action: 'needs_user',
+        rule: rule.name,
+        winningRule: rule.name,
+        ruleList: ruleListType,
+        skippedRules: skippedRules.slice(),
+        reason,
+        log: `Dry-run: needs_user (${reason}${skippedInfo})`
+      };
+    }
+
     let delay = rule.delay !== undefined ? rule.delay : defaultDelaySeconds;
     if (dangerMatch && dangerMatch.level === 'slow') {
       const slowDelay = typeof dangerMatch.delay === 'number' && dangerMatch.delay > 0 ? dangerMatch.delay : 10;
@@ -1103,7 +1152,7 @@ function resolveWinningOptionRule(enabledOptionRules, prompt, ruleListType, rule
 function explainOptionMatches(prompt, customRules) {
   if (!prompt || !Array.isArray(prompt.options)) return [];
   const rules = customRules || loadRules();
-  const optionRules = Array.isArray(rules.optionRules) ? rules.optionRules : [];
+  const optionRules = Array.isArray(rules) ? rules : (Array.isArray(rules.optionRules) ? rules.optionRules : []);
   const enabledOptionRules = optionRules.filter(r => r && r.enabled !== false);
   const promptType = prompt.promptType || 'command';
 
@@ -1172,6 +1221,11 @@ function explainOptionMatches(prompt, customRules) {
 
       if (isPersist && !rule.allowPersist) {
         reasons.push(`rule "${rule.name}": persist option blocked without allowPersist`);
+        continue;
+      }
+
+      if (prompt.commandComplete === false && !rule.allowTruncatedCommand) {
+        reasons.push(`rule "${rule.name}": command is cut off on screen and rule does not have allowTruncatedCommand`);
         continue;
       }
 
@@ -1325,7 +1379,7 @@ function evaluatePrompt(prompt, customRules) {
     }
 
     // 7. Option rules matching
-    const optionRules = Array.isArray(rules.optionRules) ? rules.optionRules : [];
+    const optionRules = Array.isArray(rules) ? rules : (Array.isArray(rules.optionRules) ? rules.optionRules : []);
     const enabledOptionRules = optionRules.filter(r => r && r.enabled !== false);
 
     if (enabledOptionRules.length > 0) {
@@ -1344,13 +1398,41 @@ function evaluatePrompt(prompt, customRules) {
     };
   }
 
-  const cmdSpaced = prompt.commandSpaced || prompt.command || '';
-  const cmdCompact = prompt.commandCompact || cmdSpaced.replace(/\s+/g, '');
+  let cmdSpaced = prompt.commandSpaced || prompt.command || '';
+  let cmdCompact = prompt.commandCompact || cmdSpaced.replace(/\s+/g, '');
+
+  let denySpaced = cmdSpaced;
+  let denyCompact = cmdCompact;
+
+  // Include any command code extracted from option texts (commands that start with '...')
+  if (promptType !== 'file_edit' && Array.isArray(prompt.options)) {
+    for (const opt of prompt.options) {
+      const optText = opt.text || '';
+      const m = optText.match(/commands that start with (['"])([\s\S]*)/i);
+      if (m) {
+        const quoteChar = m[1];
+        let inner = m[2];
+        inner = inner.replace(/\s*\(Persist to settings\.json\)\s*$/i, '');
+        if (inner.endsWith(quoteChar)) {
+          inner = inner.slice(0, -quoteChar.length);
+        }
+        inner = inner.trim();
+        if (inner) {
+          if (!cmdSpaced) {
+            cmdSpaced = inner;
+            cmdCompact = inner.replace(/\s+/g, '');
+          }
+          denySpaced += ' ' + inner.replace(/\s+/g, ' ');
+          denyCompact += inner.replace(/\s+/g, '');
+        }
+      }
+    }
+  }
 
   // 1. Deny list ALWAYS wins (checked on both spaced and compact forms)
   const denyList = rules.deny || DEFAULT_RULES.deny;
   for (const denyRule of denyList) {
-    if (checkDenyRule(denyRule, cmdSpaced, cmdCompact)) {
+    if (checkDenyRule(denyRule, denySpaced, denyCompact)) {
       return {
         action: 'blocked',
         rule: denyRule,
@@ -1390,7 +1472,7 @@ function evaluatePrompt(prompt, customRules) {
   // If the winning rule matches exactly one option, that option is the candidate (subject to guards).
   // If it matches more than one option, press nothing and mark needs_user.
   // If it matches none, continue to the next rule.
-  const optionRules = Array.isArray(rules.optionRules) ? rules.optionRules : [];
+  const optionRules = Array.isArray(rules) ? rules : (Array.isArray(rules.optionRules) ? rules.optionRules : []);
   const enabledOptionRules = optionRules.filter(r => r && r.enabled !== false);
 
   if (enabledOptionRules.length > 0) {
@@ -1567,7 +1649,13 @@ function validateAllRules(rules, options = {}) {
       sanitized.danger = validateDangerList(rules.danger);
     }
   } else {
-    sanitized.danger = DEFAULT_DANGER_LIST.map(e => ({ text: e.text, wholeWord: Boolean(e.wholeWord), level: 'hard', enabled: true }));
+    sanitized.danger = DEFAULT_DANGER_LIST.map(e => ({
+      text: e.text,
+      wholeWord: Boolean(e.wholeWord),
+      level: e.level === 'slow' ? 'slow' : 'hard',
+      delay: e.level === 'slow' ? (typeof e.delay === 'number' && e.delay > 0 ? e.delay : 10) : undefined,
+      enabled: true
+    }));
   }
 
   // Allow list
@@ -1586,7 +1674,7 @@ function validateAllRules(rules, options = {}) {
     if (!Array.isArray(rules.optionRules)) {
       errors.push('optionRules must be an array');
     } else {
-      const ALLOWED_OPTION_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist', 'promptTypes']);
+      const ALLOWED_OPTION_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist', 'allowTruncatedCommand', 'promptTypes']);
       for (let i = 0; i < rules.optionRules.length; i++) {
         const item = rules.optionRules[i];
         if (!item || typeof item !== 'object' || Array.isArray(item)) {
@@ -1636,13 +1724,14 @@ function validateAllRules(rules, options = {}) {
 function detectLoosening(oldRules, newRules) {
   const oldOptionRules = Array.isArray(oldRules?.optionRules) ? oldRules.optionRules : [];
   const newOptionRules = Array.isArray(newRules?.optionRules) ? newRules.optionRules : [];
-  const oldDanger = Array.isArray(oldRules?.danger) ? oldRules.danger : DEFAULT_DANGER_LIST;
-  const newDanger = Array.isArray(newRules?.danger) ? newRules.danger : [];
-  const oldAllow = Array.isArray(oldRules?.allow) ? oldRules.allow : DEFAULT_RULES.allow;
-  const newAllow = Array.isArray(newRules?.allow) ? newRules.allow : [];
+  const oldDanger = Array.isArray(oldRules?.danger) ? oldRules.danger : (Array.isArray(newRules?.danger) ? DEFAULT_DANGER_LIST : []);
+  const newDanger = Array.isArray(newRules?.danger) ? newRules.danger : (Array.isArray(oldRules?.danger) ? [] : []);
+  const oldAllow = Array.isArray(oldRules?.allow) ? oldRules.allow : (Array.isArray(newRules?.allow) ? DEFAULT_RULES.allow : []);
+  const newAllow = Array.isArray(newRules?.allow) ? newRules.allow : (Array.isArray(oldRules?.allow) ? [] : []);
 
   const items = [];
   let requiresPersistConfirmation = false;
+  let requiresTruncatedConfirmation = false;
 
   // 1. New or edited option rule with no commandStartsWith
   const oldRuleMap = new Map();
@@ -1658,7 +1747,8 @@ function detectLoosening(oldRules, newRules) {
       oldRule.startsWith !== newRule.startsWith ||
       oldRule.endsWith !== newRule.endsWith ||
       oldRule.commandStartsWith !== newRule.commandStartsWith ||
-      Boolean(oldRule.allowPersist) !== Boolean(newRule.allowPersist)
+      Boolean(oldRule.allowPersist) !== Boolean(newRule.allowPersist) ||
+      Boolean(oldRule.allowTruncatedCommand) !== Boolean(newRule.allowTruncatedCommand)
     );
 
     const hasCommandScope = !newRule.promptTypes || newRule.promptTypes.includes('command') || newRule.promptTypes.includes('run_command');
@@ -1672,6 +1762,13 @@ function detectLoosening(oldRules, newRules) {
     if (setsPersist || matchesPersist) {
       items.push(`Option rule "${newRule.name}" allows persisting permissions or matches persist options`);
       requiresPersistConfirmation = true;
+    }
+
+    // 2b. A rule that sets allowTruncatedCommand true
+    const setsTruncated = newRule.allowTruncatedCommand === true && (!oldRule || !oldRule.allowTruncatedCommand);
+    if (setsTruncated) {
+      items.push(`Option rule "${newRule.name}" allows truncated/cut-off commands`);
+      requiresTruncatedConfirmation = true;
     }
   }
 
@@ -1727,7 +1824,9 @@ function detectLoosening(oldRules, newRules) {
   return {
     isLooser: items.length > 0,
     items,
-    requiresPersistConfirmation
+    requiresPersistConfirmation,
+    requiresTruncatedConfirmation: Boolean(requiresTruncatedConfirmation),
+    requiredWord: requiresPersistConfirmation ? 'PERSIST' : (requiresTruncatedConfirmation ? 'TRUNCATED' : null)
   };
 }
 
@@ -1865,7 +1964,8 @@ function resetDangerList(customPath) {
   current.danger = DEFAULT_DANGER_LIST.map(e => ({
     text: e.text,
     wholeWord: Boolean(e.wholeWord),
-    level: 'hard',
+    level: e.level === 'slow' ? 'slow' : 'hard',
+    delay: e.level === 'slow' ? (typeof e.delay === 'number' && e.delay > 0 ? e.delay : 10) : undefined,
     enabled: true
   }));
   return saveRules(current, customPath, { changeSummary: 'Reset danger list to defaults' });
@@ -1887,7 +1987,13 @@ function resetAllRules(customPath) {
   const defaults = {
     defaultDelaySeconds: 3,
     deny: DEFAULT_RULES.deny.slice(),
-    danger: DEFAULT_DANGER_LIST.map(e => ({ text: e.text, wholeWord: Boolean(e.wholeWord), level: 'hard', enabled: true })),
+    danger: DEFAULT_DANGER_LIST.map(e => ({
+      text: e.text,
+      wholeWord: Boolean(e.wholeWord),
+      level: e.level === 'slow' ? 'slow' : 'hard',
+      delay: e.level === 'slow' ? (typeof e.delay === 'number' && e.delay > 0 ? e.delay : 10) : undefined,
+      enabled: true
+    })),
     allow: DEFAULT_RULES.allow.slice(),
     optionRules: (DEFAULT_RULES.optionRules || []).slice()
   };
@@ -1921,7 +2027,7 @@ function validateFolderRules(rules, globalRules, options = {}) {
     if (!Array.isArray(rules.optionRules)) {
       errors.push('optionRules must be an array');
     } else {
-      const ALLOWED_OPTION_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist', 'promptTypes']);
+      const ALLOWED_OPTION_KEYS = new Set(['name', 'startsWith', 'endsWith', 'commandStartsWith', 'enabled', 'allowPersist', 'allowTruncatedCommand', 'promptTypes']);
       for (let i = 0; i < rules.optionRules.length; i++) {
         const item = rules.optionRules[i];
         if (!item || typeof item !== 'object' || Array.isArray(item)) {
