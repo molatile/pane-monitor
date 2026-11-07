@@ -175,6 +175,13 @@ contextBridge.exposeInMainWorld('agentwatch', {
   },
 
   /**
+   * Sets keep accepting when no window is open setting (Stage 8).
+   */
+  setKeepAcceptingWhenNoWindow: (enabled) => {
+    return ipcRenderer.invoke('set-keep-accepting-no-window', enabled);
+  },
+
+  /**
    * Turns auto-accept on or off for a specific session (Stage 6).
    */
   setSessionAuto: (payload) => {

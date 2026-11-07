@@ -555,6 +555,32 @@ function isPersistOption(option) {
  * - If rule has endsWith, option text must end with it
  * - If rule has promptTypes, prompt.promptType must match one of them
  */
+/**
+ * Normalizes an option text for best-match rule comparison:
+ * 1. Strips leading number and optional '>' marker (e.g. "> 1. " or "2. ")
+ * 2. Lowercases
+ * 3. Removes ALL whitespace so wrapped lines and joined lines never matter
+ */
+function normalizeOptionText(text) {
+  if (typeof text !== 'string') return '';
+  return text
+    .replace(/^\s*(?:>\s*)?\d+[\.\)\-]?\s*/, '')
+    .toLowerCase()
+    .replace(/\s+/g, '');
+}
+
+/**
+ * Normalizes rule text for best-match rule comparison:
+ * 1. Lowercases
+ * 2. Removes ALL whitespace
+ */
+function normalizeRuleText(text) {
+  if (typeof text !== 'string') return '';
+  return text
+    .toLowerCase()
+    .replace(/\s+/g, '');
+}
+
 function matchesOptionRule(rule, option, cmdSpacedOrPrompt, promptObj) {
   if (!rule || rule.enabled === false) return false;
   if (!option || typeof option.text !== 'string') return false;
@@ -563,7 +589,7 @@ function matchesOptionRule(rule, option, cmdSpacedOrPrompt, promptObj) {
   const cmdSpaced = typeof cmdSpacedOrPrompt === 'string' ? cmdSpacedOrPrompt : (prompt ? (prompt.commandSpaced || prompt.command || '') : '');
 
   // "No" options are NEVER pressed
-  if (option.classification === 'no' || /^(?:no\b|cancel\b|abort\b|reject\b|skip\b|exit\b|quit\b|dismiss\b|don'?t\b)/i.test((option.text || '').trim())) {
+  if (option.classification === 'no' || /^(?:no\b|cancel\b|abort\b|reject\b|skip\b|exit\b|quit\b|dismiss\b|don'?t\b)/i.test((option.text || '').replace(/^\s*(?:>\s*)?\d+[\.\)\-]?\s*/, '').trim())) {
     return false;
   }
 
@@ -580,47 +606,39 @@ function matchesOptionRule(rule, option, cmdSpacedOrPrompt, promptObj) {
     }
   }
 
-  // If the rule has commandStartsWith, the spaced command must start with it
-  if (rule.commandStartsWith) {
+  // Optional: Only for commands starting with (under Advanced)
+  if (rule.commandStartsWith && typeof rule.commandStartsWith === 'string' && rule.commandStartsWith.trim() !== '') {
+    let prefix = rule.commandStartsWith.trim();
+    const extracted = prefix.match(/for commands that start with ['"]([^'"]+)['"]/i);
+    if (extracted) prefix = extracted[1];
+
+    let target = '';
     if (prompt && prompt.promptType === 'file_edit') {
-      let prefix = rule.commandStartsWith.trim();
-      const extracted = prefix.match(/for commands that start with ['"]([^'"]+)['"]/i);
-      if (extracted) prefix = extracted[1];
-      const target = (prompt.targetFile || cmdSpaced || '').trim().toLowerCase();
-      if (!target.startsWith(prefix.toLowerCase())) {
-        return false;
-      }
+      target = prompt.targetFile || prompt.commandSpaced || prompt.command || '';
     } else {
-      let prefix = rule.commandStartsWith.trim();
-      // Intelligent extraction if full prompt option text was pasted into commandStartsWith:
-      const extracted = prefix.match(/for commands that start with ['"]([^'"]+)['"]/i);
-      if (extracted) {
-        prefix = extracted[1];
-      }
-      const cmd = (cmdSpaced || '').trim().toLowerCase();
-      if (!cmd.startsWith(prefix.toLowerCase())) {
-        return false;
-      }
+      target = (prompt && (prompt.commandSpaced || prompt.command)) || cmdSpaced || '';
+    }
+
+    const normTarget = target.toLowerCase().replace(/\s+/g, '');
+    const normPrefix = prefix.toLowerCase().replace(/\s+/g, '');
+    if (!normTarget.startsWith(normPrefix)) {
+      return false;
     }
   }
 
-  // Compare against the option text only (not the number prefix)
-  const cleanOptionText = option.text
-    .replace(/^\s*(?:>\s*)?\d+[\.\)\-]?\s*/, '')
-    .trim()
-    .toLowerCase();
+  const normOption = normalizeOptionText(option.text);
+  const normStartsWith = normalizeRuleText(rule.startsWith || '');
+  if (!normStartsWith) return false;
 
-  let startsWith = (rule.startsWith || '').trim().toLowerCase();
-  const extractedStarts = startsWith.match(/^(yes,\s+and\s+always\s+allow\s+in\s+this\s+conversation)/i);
-  if (extractedStarts && cleanOptionText.startsWith(extractedStarts[1])) {
-    // Matched the standard conversation option prefix
-  } else if (!cleanOptionText.startsWith(startsWith)) {
+  // An option is a candidate only if its normalized text starts with the whole normalized rule text;
+  // a rule that only partly matches an option never counts.
+  if (!normOption.startsWith(normStartsWith)) {
     return false;
   }
 
-  if (rule.endsWith) {
-    const endsWith = rule.endsWith.trim().toLowerCase();
-    if (!cleanOptionText.endsWith(endsWith)) {
+  if (rule.endsWith && typeof rule.endsWith === 'string' && rule.endsWith.trim() !== '') {
+    const normEndsWith = normalizeRuleText(rule.endsWith);
+    if (!normOption.endsWith(normEndsWith)) {
       return false;
     }
   }
@@ -958,6 +976,224 @@ function isChoiceQuestion(prompt) {
   return false;
 }
 
+function resolveWinningOptionRule(enabledOptionRules, prompt, ruleListType, rulePrefix, dangerMatch, defaultDelaySeconds) {
+  const skippedRules = [];
+
+  for (const rule of enabledOptionRules) {
+    const matches = [];
+    for (const opt of prompt.options) {
+      if (matchesOptionRule(rule, opt, prompt)) {
+        matches.push(opt);
+      }
+    }
+
+    if (matches.length === 0) {
+      skippedRules.push(rule.name);
+      continue;
+    }
+
+    const normRule = normalizeRuleText(rule.startsWith || '');
+
+    // Best-match option rules candidate resolution:
+    // 1. Never a persist option unless that rule has allowPersist
+    let candidates = matches.slice();
+    if (!rule.allowPersist) {
+      candidates = candidates.filter(opt => !isPersistOption(opt));
+    }
+
+    if (candidates.length === 0) {
+      const reason = `persist option blocked (rule "${rule.name}" has allowPersist: false)`;
+      const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
+      return {
+        action: 'needs_user',
+        rule: rule.name,
+        winningRule: rule.name,
+        ruleList: ruleListType,
+        skippedRules: skippedRules.slice(),
+        reason,
+        log: `Dry-run: needs_user (${reason}${skippedInfo})`
+      };
+    }
+
+    let matchedOption = null;
+
+    if (candidates.length === 1) {
+      matchedOption = candidates[0];
+    } else {
+      // 2. Candidate with least extra text after the rule text
+      let minExtra = Infinity;
+      for (const cand of candidates) {
+        const extra = normalizeOptionText(cand.text).length - normRule.length;
+        if (extra < minExtra) {
+          minExtra = extra;
+        }
+      }
+      const bestCandidates = candidates.filter(cand => {
+        const extra = normalizeOptionText(cand.text).length - normRule.length;
+        return extra === minExtra;
+      });
+
+      if (bestCandidates.length === 1) {
+        matchedOption = bestCandidates[0];
+      } else {
+        // 3. If still tied, press nothing and explain the tie
+        const tiedKeys = bestCandidates.map(c => c.key || String(c.number)).join(' and ');
+        const reason = `tie between options ${tiedKeys} (multiple options matched winning rule "${rule.name}")`;
+        const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
+        return {
+          action: 'needs_user',
+          rule: rule.name,
+          winningRule: rule.name,
+          ruleList: ruleListType,
+          skippedRules: skippedRules.slice(),
+          reason,
+          log: `Dry-run: needs_user (${reason}${skippedInfo})`
+        };
+      }
+    }
+
+    // Persist protection safety check
+    if (isPersistOption(matchedOption) && !rule.allowPersist) {
+      const reason = `persist option blocked (rule "${rule.name}" has allowPersist: false)`;
+      const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
+      return {
+        action: 'needs_user',
+        rule: rule.name,
+        winningRule: rule.name,
+        ruleList: ruleListType,
+        skippedRules: skippedRules.slice(),
+        reason,
+        log: `Dry-run: needs_user (${reason}${skippedInfo})`
+      };
+    }
+
+    let delay = rule.delay !== undefined ? rule.delay : defaultDelaySeconds;
+    if (dangerMatch && dangerMatch.level === 'slow') {
+      const slowDelay = typeof dangerMatch.delay === 'number' && dangerMatch.delay > 0 ? dangerMatch.delay : 10;
+      delay = Math.max(delay, slowDelay);
+    }
+    const optionKey = matchedOption.key || String(matchedOption.number);
+    const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
+    return {
+      action: 'would_approve',
+      delay,
+      rule: rule.name,
+      winningRule: rule.name,
+      ruleList: ruleListType,
+      skippedRules: skippedRules.slice(),
+      ruleType: 'optionRule',
+      optionKey,
+      optionText: matchedOption.text,
+      matchedOption,
+      slowDanger: dangerMatch ? dangerMatch.text : undefined,
+      log: `Dry-run: would approve option ${optionKey} after ${delay}s (${rulePrefix}${rule.name}${skippedInfo})`
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Explains match status for each option in a prompt across enabled rules.
+ * Used by the Try-it tester to display:
+ * - Matched or not matched
+ * - Match result
+ * - Why a rule did not match
+ */
+function explainOptionMatches(prompt, customRules) {
+  if (!prompt || !Array.isArray(prompt.options)) return [];
+  const rules = customRules || loadRules();
+  const optionRules = Array.isArray(rules.optionRules) ? rules.optionRules : [];
+  const enabledOptionRules = optionRules.filter(r => r && r.enabled !== false);
+  const promptType = prompt.promptType || 'command';
+
+  return prompt.options.map(option => {
+    const key = option.key || String(option.number);
+    const num = option.number;
+    const text = option.text || '';
+    const normOpt = normalizeOptionText(text);
+
+    const isNo = option.classification === 'no' || /^(?:no\b|cancel\b|abort\b|reject\b|skip\b|exit\b|quit\b|dismiss\b|don'?t\b)/i.test((text || '').replace(/^\s*(?:>\s*)?\d+[\.\)\-]?\s*/, '').trim());
+    const isPersist = isPersistOption(option);
+
+    if (isNo) {
+      return {
+        key,
+        number: num,
+        text,
+        matched: false,
+        matchResult: 'Disqualified: "No" option',
+        matchingRules: [],
+        disqualified: true,
+        reasons: ['disqualified: "No" option (never pressed)']
+      };
+    }
+
+    const matchingRules = [];
+    const reasons = [];
+
+    for (const rule of enabledOptionRules) {
+      const normRule = normalizeRuleText(rule.startsWith || '');
+      if (rule.promptTypes && Array.isArray(rule.promptTypes) && rule.promptTypes.length > 0) {
+        const normCurrent = String(promptType).toLowerCase().replace(/[\s_-]+/g, '');
+        const matchedType = rule.promptTypes.some(t => String(t).toLowerCase().replace(/[\s_-]+/g, '') === normCurrent);
+        if (!matchedType) {
+          reasons.push(`rule "${rule.name}": promptTypes (${rule.promptTypes.join(', ')}) do not match "${promptType}"`);
+          continue;
+        }
+      }
+
+      if (rule.commandStartsWith && typeof rule.commandStartsWith === 'string' && rule.commandStartsWith.trim() !== '') {
+        const cmd = (prompt.commandSpaced || prompt.command || prompt.targetFile || '').toLowerCase().replace(/\s+/g, '');
+        const prefix = rule.commandStartsWith.toLowerCase().replace(/\s+/g, '');
+        if (!cmd.startsWith(prefix)) {
+          reasons.push(`rule "${rule.name}": command does not start with "${rule.commandStartsWith}"`);
+          continue;
+        }
+      }
+
+      if (!normRule) {
+        reasons.push(`rule "${rule.name}": empty startsWith`);
+        continue;
+      }
+
+      if (!normOpt.startsWith(normRule)) {
+        reasons.push(`rule "${rule.name}": startsWith did not match option prefix`);
+        continue;
+      }
+
+      if (rule.endsWith && typeof rule.endsWith === 'string' && rule.endsWith.trim() !== '') {
+        const normEndsWith = normalizeRuleText(rule.endsWith);
+        if (!normOpt.endsWith(normEndsWith)) {
+          reasons.push(`rule "${rule.name}": endsWith did not match`);
+          continue;
+        }
+      }
+
+      if (isPersist && !rule.allowPersist) {
+        reasons.push(`rule "${rule.name}": persist option blocked without allowPersist`);
+        continue;
+      }
+
+      matchingRules.push(rule.name);
+    }
+
+    const matched = matchingRules.length > 0;
+    const matchResult = matched ? `Matched rule "${matchingRules[0]}"` : (isPersist ? 'Disqualified: persist option without allowPersist' : 'Not matched');
+
+    return {
+      key,
+      number: num,
+      text,
+      matched,
+      matchResult,
+      matchingRules,
+      disqualified: false,
+      reasons
+    };
+  });
+}
+
 /**
  * Evaluates a prompt against rules in dry-run mode.
  * Returns decision object:
@@ -1093,82 +1329,10 @@ function evaluatePrompt(prompt, customRules) {
     const enabledOptionRules = optionRules.filter(r => r && r.enabled !== false);
 
     if (enabledOptionRules.length > 0) {
-      const skippedRules = [];
-      let winningRule = null;
-      let candidateMatches = null;
-
-      for (const rule of enabledOptionRules) {
-        const matches = [];
-        for (const opt of prompt.options) {
-          if (matchesOptionRule(rule, opt, prompt)) {
-            matches.push(opt);
-          }
-        }
-
-        if (matches.length === 0) {
-          skippedRules.push(rule.name);
-          continue;
-        }
-
-        winningRule = rule;
-        candidateMatches = matches;
-        break;
-      }
-
-      if (winningRule) {
-        if (candidateMatches.length > 1) {
-          const reason = `multiple options matched winning rule "${winningRule.name}"`;
-          const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
-          return {
-            action: 'needs_user',
-            rule: winningRule.name,
-            winningRule: winningRule.name,
-            ruleList: ruleListType,
-            skippedRules: skippedRules.slice(),
-            reason,
-            log: `Dry-run: needs_user (${reason}${skippedInfo})`
-          };
-        }
-
-        const matchedOption = candidateMatches[0];
-
-        if (isPersistOption(matchedOption) && !winningRule.allowPersist) {
-          const reason = `persist option blocked (rule "${winningRule.name}" has allowPersist: false)`;
-          const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
-          return {
-            action: 'needs_user',
-            rule: winningRule.name,
-            winningRule: winningRule.name,
-            ruleList: ruleListType,
-            skippedRules: skippedRules.slice(),
-            reason,
-            log: `Dry-run: needs_user (${reason}${skippedInfo})`
-          };
-        }
-
-        let delay = winningRule.delay !== undefined
-          ? winningRule.delay
-          : (rules.defaultDelaySeconds || 3);
-        if (dangerMatch && dangerMatch.level === 'slow') {
-          const slowDelay = typeof dangerMatch.delay === 'number' && dangerMatch.delay > 0 ? dangerMatch.delay : 10;
-          delay = Math.max(delay, slowDelay);
-        }
-        const optionKey = matchedOption.key || String(matchedOption.number);
-        const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
-        return {
-          action: 'would_approve',
-          delay,
-          rule: winningRule.name,
-          winningRule: winningRule.name,
-          ruleList: ruleListType,
-          skippedRules: skippedRules.slice(),
-          ruleType: 'optionRule',
-          optionKey,
-          optionText: matchedOption.text,
-          matchedOption,
-          slowDanger: dangerMatch ? dangerMatch.text : undefined,
-          log: `Dry-run: would approve option ${optionKey} after ${delay}s (${rulePrefix}${winningRule.name}${skippedInfo})`
-        };
+      const defaultDelay = rules.defaultDelaySeconds || 3;
+      const res = resolveWinningOptionRule(enabledOptionRules, prompt, ruleListType, rulePrefix, dangerMatch, defaultDelay);
+      if (res) {
+        return res;
       }
     }
 
@@ -1230,88 +1394,10 @@ function evaluatePrompt(prompt, customRules) {
   const enabledOptionRules = optionRules.filter(r => r && r.enabled !== false);
 
   if (enabledOptionRules.length > 0) {
-    const skippedRules = [];
-    let winningRule = null;
-    let candidateMatches = null;
-
-    for (const rule of enabledOptionRules) {
-      const matches = [];
-      for (const opt of prompt.options) {
-        if (matchesOptionRule(rule, opt, prompt)) {
-          matches.push(opt);
-        }
-      }
-
-      if (matches.length === 0) {
-        // No option matched this rule; record as skipped higher-priority rule
-        skippedRules.push(rule.name);
-        continue;
-      }
-
-      // First rule that matches at least one option wins!
-      winningRule = rule;
-      candidateMatches = matches;
-      break;
-    }
-
-    if (winningRule) {
-      if (candidateMatches.length > 1) {
-        // Winning rule matches more than one option: press nothing and mark needs_user
-        const reason = `multiple options matched winning rule "${winningRule.name}"`;
-        const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
-        return {
-          action: 'needs_user',
-          rule: winningRule.name,
-          winningRule: winningRule.name,
-          ruleList: ruleListType,
-          skippedRules: skippedRules.slice(),
-          reason,
-          log: `Dry-run: needs_user (${reason}${skippedInfo})`
-        };
-      }
-
-      // Exactly ONE option matched the winning rule
-      const matchedOption = candidateMatches[0];
-
-      // Persist protection: if matched option is classified yes_persist,
-      // require the winning rule to have allowPersist true.
-      if (isPersistOption(matchedOption) && !winningRule.allowPersist) {
-        const reason = `persist option blocked (rule "${winningRule.name}" has allowPersist: false)`;
-        const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
-        return {
-          action: 'needs_user',
-          rule: winningRule.name,
-          winningRule: winningRule.name,
-          ruleList: ruleListType,
-          skippedRules: skippedRules.slice(),
-          reason,
-          log: `Dry-run: needs_user (${reason}${skippedInfo})`
-        };
-      }
-
-      let delay = winningRule.delay !== undefined
-        ? winningRule.delay
-        : (rules.defaultDelaySeconds || 3);
-      if (dangerMatch && dangerMatch.level === 'slow') {
-        const slowDelay = typeof dangerMatch.delay === 'number' && dangerMatch.delay > 0 ? dangerMatch.delay : 10;
-        delay = Math.max(delay, slowDelay);
-      }
-      const optionKey = matchedOption.key || String(matchedOption.number);
-      const skippedInfo = skippedRules.length > 0 ? `, skipped: ${skippedRules.join(', ')}` : '';
-      return {
-        action: 'would_approve',
-        delay,
-        rule: winningRule.name,
-        winningRule: winningRule.name,
-        ruleList: ruleListType,
-        skippedRules: skippedRules.slice(),
-        ruleType: 'optionRule',
-        optionKey,
-        optionText: matchedOption.text,
-        matchedOption,
-        slowDanger: dangerMatch ? dangerMatch.text : undefined,
-        log: `Dry-run: would approve option ${optionKey} after ${delay}s (${rulePrefix}${winningRule.name}${skippedInfo})`
-      };
+    const defaultDelay = rules.defaultDelaySeconds || 3;
+    const res = resolveWinningOptionRule(enabledOptionRules, prompt, ruleListType, rulePrefix, dangerMatch, defaultDelay);
+    if (res) {
+      return res;
     }
   }
 
@@ -2318,6 +2404,9 @@ module.exports = {
   validateAllRules,
   validateFolderRules,
   matchesOptionRule,
+  normalizeOptionText,
+  normalizeRuleText,
+  explainOptionMatches,
   isPersistOption,
   detectLoosening,
   saveRules,

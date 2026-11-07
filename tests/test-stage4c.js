@@ -197,8 +197,8 @@ async function runStage4cTests() {
         commandSpaced: 'git status',
         question: 'Run this command?',
         options: [
-          { key: '1', number: 1, text: 'Yes, allow first', classification: 'yes_once' },
-          { key: '2', number: 2, text: 'Yes, allow second', classification: 'yes_session' },
+          { key: '1', number: 1, text: 'Yes, allow option 1', classification: 'yes_once' },
+          { key: '2', number: 2, text: 'Yes, allow option 2', classification: 'yes_session' },
           { key: '3', number: 3, text: 'No, cancel', classification: 'no' }
         ]
       };

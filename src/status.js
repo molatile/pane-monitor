@@ -44,7 +44,17 @@ function formatDecision(decision) {
       return `blocked by rule: ${decision.rule || 'deny'}`;
     }
     if (decision.action === 'needs_user') {
-      return 'needs you';
+      if (!decision.reason) {
+        return 'needs you';
+      }
+      let r = decision.reason;
+      if (r === 'no option rule matched for file edit') {
+        r = 'no rule matched';
+      }
+      if (typeof r === 'string' && r.startsWith('needs you because:')) {
+        return r;
+      }
+      return `needs you because: ${r}`;
     }
     if (decision.log) {
       return decision.log.replace(/^Dry-run:\s*/i, '');
@@ -202,6 +212,8 @@ class SessionStatusManager {
       pendingQuestion: this.pendingQuestion || null,
       hasProfile: this.hasProfile,
       auto: Boolean(this.auto),
+      autoPaused: Boolean(this.autoPaused),
+      autoPausedReason: this.autoPausedReason || null,
       allowPersist: Boolean(this.allowPersist),
       countdown: (this.countdown !== undefined && this.countdown !== null) ? this.countdown : null,
       rule: this.rule || null,

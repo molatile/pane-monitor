@@ -11,6 +11,8 @@ const {
   setSessionOrder,
   setAlwaysOnTop,
   setWindowBounds,
+  setKeepAcceptingWhenNoWindow,
+  getViewersDir,
   acquireNotificationLock,
   getDashboardData,
   validateLogDir
@@ -27,6 +29,7 @@ const {
   resetDangerList,
   detectLoosening,
   evaluatePrompt,
+  explainOptionMatches,
   logRulesChange,
   getFolderRulesDir,
   hasFolderRules,
@@ -80,24 +83,11 @@ if (app && typeof app.requestSingleInstanceLock === 'function') {
     app.whenReady().then(createWindow);
 
     app.on('window-all-closed', () => {
-      try {
-        app.releaseSingleInstanceLock();
-      } catch (e) {}
-      app.quit();
+      quitAppFully();
     });
 
     app.on('will-quit', () => {
-      try {
-        app.releaseSingleInstanceLock();
-      } catch (e) {}
-      try {
-        const cfg = loadConfig(configPath);
-        if (cfg.guiPid === process.pid) {
-          delete cfg.guiPid;
-          delete cfg.guiStartTime;
-          saveConfig(cfg, configPath);
-        }
-      } catch (e) {}
+      quitAppFully();
     });
 
     app.on('activate', () => {
@@ -106,6 +96,65 @@ if (app && typeof app.requestSingleInstanceLock === 'function') {
       }
     });
   }
+}
+
+const viewersDir = getViewersDir();
+try { fs.mkdirSync(viewersDir, { recursive: true }); } catch (e) {}
+const guiHeartbeatFile = path.join(viewersDir, `viewer-gui-${process.pid}.json`);
+let guiHeartbeatInterval = null;
+
+function writeGuiHeartbeat() {
+  try {
+    const filePath = guiHeartbeatFile;
+    fs.writeFileSync(filePath, JSON.stringify({ pid: process.pid, type: 'gui', time: Date.now() }), 'utf8');
+  } catch (e) {}
+}
+
+function cleanupGuiHeartbeat() {
+  try {
+    if (fs.existsSync(guiHeartbeatFile)) {
+      fs.unlinkSync(guiHeartbeatFile);
+    }
+  } catch (e) {}
+}
+
+process.on('exit', cleanupGuiHeartbeat);
+
+function quitAppFully() {
+  cleanupGuiHeartbeat();
+  if (guiHeartbeatInterval) {
+    clearInterval(guiHeartbeatInterval);
+    guiHeartbeatInterval = null;
+  }
+  if (updateInterval) {
+    clearInterval(updateInterval);
+    updateInterval = null;
+  }
+  if (saveBoundsTimeout) {
+    clearTimeout(saveBoundsTimeout);
+    saveBoundsTimeout = null;
+  }
+  try {
+    if (app && typeof app.releaseSingleInstanceLock === 'function') {
+      app.releaseSingleInstanceLock();
+    }
+  } catch (e) {}
+  try {
+    const cfg = loadConfig(configPath);
+    if (cfg.guiPid === process.pid) {
+      delete cfg.guiPid;
+      delete cfg.guiStartTime;
+      saveConfig(cfg, configPath);
+    }
+  } catch (e) {}
+  try {
+    if (app && typeof app.exit === 'function') {
+      app.exit(0);
+    }
+  } catch (e) {}
+  try {
+    process.exit(0);
+  } catch (e) {}
 }
 
 // Notification Manager reusing identical rules and coordination lock
@@ -204,25 +253,18 @@ function createWindow() {
   mainWindow.on('resize', onSaveBounds);
   mainWindow.on('move', onSaveBounds);
 
+  writeGuiHeartbeat();
+  if (guiHeartbeatInterval) clearInterval(guiHeartbeatInterval);
+  guiHeartbeatInterval = setInterval(writeGuiHeartbeat, 2000);
+  if (guiHeartbeatInterval.unref) guiHeartbeatInterval.unref();
+
+  mainWindow.on('close', () => {
+    quitAppFully();
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
-    if (updateInterval) {
-      clearInterval(updateInterval);
-      updateInterval = null;
-    }
-    if (saveBoundsTimeout) {
-      clearTimeout(saveBoundsTimeout);
-      saveBoundsTimeout = null;
-    }
-    try {
-      app.releaseSingleInstanceLock();
-    } catch (e) {}
-    app.quit();
-    setTimeout(() => {
-      try {
-        app.exit(0);
-      } catch (e) {}
-    }, 500).unref();
+    quitAppFully();
   });
 
   // Start periodic 1-second update
@@ -454,10 +496,22 @@ ipcMain.handle('evaluate-prompt-test', (event, payload = {}) => {
   try {
     const rulesToUse = customRules || loadRules(CANONICAL_RULES_PATH);
     const decision = evaluatePrompt(prompt, rulesToUse);
+    const optionExplanations = explainOptionMatches(prompt, rulesToUse);
     return {
       success: true,
-      decision
+      decision,
+      optionExplanations
     };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('set-keep-accepting-no-window', (event, enabled) => {
+  try {
+    const cfg = loadConfig(configPath);
+    setKeepAcceptingWhenNoWindow(cfg, enabled, configPath);
+    return { success: true, keepAcceptingWhenNoWindow: cfg.keepAcceptingWhenNoWindow };
   } catch (e) {
     return { success: false, error: e.message };
   }

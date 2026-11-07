@@ -11,7 +11,7 @@ try {
   pty = require('@lydell/node-pty');
 }
 const { Terminal } = require('@xterm/headless');
-const { extractPromptFromScreen, getSelectedOptionNumberFromScreen, appendUnknownPromptSample } = require('./parser');
+const { extractPromptFromScreen, getSelectedOptionNumberFromScreen, appendUnknownPromptSample, isPromptLive } = require('./parser');
 const { resolveExecutable } = require('./resolver');
 const { getProfileForCommand, getNoProfileNotice } = require('./profile');
 const {
@@ -30,7 +30,7 @@ const { maskText, maskScreenLines } = require('./masker');
 const { appendHistoryEvent, computeAgreement } = require('./history');
 const { SessionStatusManager } = require('./status');
 const { SessionStateTracker } = require('./state');
-const { loadConfig, isGuiRunning, isGuiStale, stopGui } = require('./shared');
+const { loadConfig, isGuiRunning, isGuiStale, stopGui, hasFreshViewer, getViewersDir } = require('./shared');
 const { startGui } = require('./gui');
 
 /**
@@ -399,6 +399,62 @@ function startAgentwatch(options = {}) {
   let lastUserKeystrokeTime = 0;
   let lastChildDataReceivedTime = Date.now();
   const autoAnswersHistory = options.autoAnswersHistory || [];
+  const viewersDir = options.viewersDir || getViewersDir();
+  let isViewerPaused = false;
+  let lastViewerSeenTime = options.initialViewerSeenTime !== undefined ? options.initialViewerSeenTime : Date.now();
+
+  function checkViewerPause() {
+    if (options.checkViewerHeartbeat === false) return;
+    const cfg = loadConfig(effectiveConfigPath);
+    if (cfg.keepAcceptingWhenNoWindow) {
+      if (isViewerPaused) {
+        isViewerPaused = false;
+        statusManager.autoPaused = false;
+        statusManager.autoPausedReason = null;
+        statusManager.writeStatus();
+      }
+      return;
+    }
+
+    const hasViewer = hasFreshViewer(viewersDir, 10000);
+    const now = Date.now();
+    if (hasViewer) {
+      lastViewerSeenTime = now;
+      if (isViewerPaused) {
+        isViewerPaused = false;
+        statusManager.autoPaused = false;
+        statusManager.autoPausedReason = null;
+        statusManager.writeStatus();
+
+        if (activePrompt && !activePrompt.inCountdown) {
+          const promptRules = getEffectiveRules();
+          const decision = evaluatePrompt(activePrompt.detected, promptRules);
+          if (decision.action === 'would_approve' && isPromptEligibleForAuto(activePrompt.detected, decision)) {
+            activePrompt.decision = decision;
+            startPromptCountdown(activePrompt);
+          }
+        }
+      }
+    } else {
+      if (now - lastViewerSeenTime >= 10000) {
+        if (!isViewerPaused) {
+          isViewerPaused = true;
+          const msg = 'agentwatch: no viewer open, auto-accept paused';
+          console.log(msg);
+          if (options.stdout && options.stdout.write && options.stdout !== process.stdout) {
+            options.stdout.write(msg + '\n');
+          }
+          statusManager.autoPaused = true;
+          statusManager.autoPausedReason = 'no viewer open';
+          statusManager.writeStatus();
+
+          if (activePrompt && activePrompt.inCountdown) {
+            cancelCountdown('viewer_paused');
+          }
+        }
+      }
+    }
+  }
 
   function checkCircuitBreaker(cmd, now = Date.now()) {
     if (!autoAcceptEnabled) {
@@ -687,6 +743,7 @@ function startAgentwatch(options = {}) {
   function isPromptEligibleForAuto(detected, decision) {
     syncControlState();
     if (!autoAcceptEnabled) return false;
+    if (isViewerPaused) return false;
     if (!hasProfile) return false;
     if (!detected || !detected.footerSeen) return false;
     if (!decision || decision.action !== 'would_approve') return false;
@@ -1288,9 +1345,12 @@ function startAgentwatch(options = {}) {
     activePrompt.closedEvent = closedEvent;
     recentlyClosedPrompt = activePrompt;
     activePrompt = null;
+    statusManager.prompt = null;
+    statusManager.writeStatus();
   }
 
   function inspectScreenForPrompts(nowMs) {
+    checkViewerPause();
     syncControlState();
     const screenLines = getScreenLines();
 
@@ -1306,12 +1366,14 @@ function startAgentwatch(options = {}) {
     }
 
     const detected = extractPromptFromScreen(screenLines, profile);
+    const isLive = detected ? isPromptLive(detected, screenLines, profile) : false;
 
     const isComplete = detected !== null &&
       detected.question &&
       Array.isArray(detected.options) &&
       detected.options.length >= (profile && profile.prompt && profile.prompt.minOptions !== undefined ? profile.prompt.minOptions : 2) &&
-      detected.footerSeen === true;
+      detected.footerSeen === true &&
+      isLive;
 
     // Check if input box is visible
     const isInputBoxVisible = stateTracker.isInputBoxOnScreen(screenLines);
@@ -1651,6 +1713,8 @@ function startAgentwatch(options = {}) {
     closeActivePrompt,
     sendAutoAnswer,
     cancelCountdown,
+    isViewerPaused: () => isViewerPaused,
+    checkViewerPause,
     isPromptEligibleForAuto,
     checkCircuitBreaker,
     applyCircuitBreakerTrip,

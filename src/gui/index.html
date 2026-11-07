@@ -131,6 +131,7 @@
             <div>
               <h2 class="rules-section-title">Option Rules</h2>
               <p class="rules-section-desc">Evaluated top-to-bottom. Priority is determined by rule order.</p>
+              <p class="rules-section-hint" style="color: var(--color-text-muted, #94a3b8); font-size: 11px; margin-top: 4px;">The option text already contains the start of the command, so include it in 'starts with' if you want to limit a rule to certain commands.</p>
             </div>
             <button id="add-option-rule-btn" class="btn btn-secondary btn-sm" type="button">+ Add Option Rule</button>
           </div>
@@ -374,6 +375,14 @@
             <div class="setting-text">
               <span class="setting-label">Start new sessions with auto-accept</span>
               <span class="setting-desc">Enable auto-accept by default for newly started sessions</span>
+            </div>
+          </label>
+
+          <label class="setting-item">
+            <input type="checkbox" id="setting-keep-accepting-no-window">
+            <div class="setting-text">
+              <span class="setting-label">Keep accepting when no window is open</span>
+              <span class="setting-desc">Continue auto-accepting prompts even when no viewer window is open</span>
             </div>
           </label>
 

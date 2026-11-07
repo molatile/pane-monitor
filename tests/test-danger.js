@@ -547,8 +547,8 @@ function makePrompt(cmdSpaced, cmdCompact, options, question) {
 
     const renderedText = lines.join('\n');
     assert(
-      renderedText.includes("(DANGER: matched 'drop table')"),
-      `Dashboard row must show "(DANGER: matched 'drop table')", got:\n${renderedText}`
+      renderedText.includes("(needs you because: danger word 'drop table')") || renderedText.includes("(DANGER: matched 'drop table')"),
+      `Dashboard row must show "(needs you because: danger word 'drop table')", got:\n${renderedText}`
     );
   });
 

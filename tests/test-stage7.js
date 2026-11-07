@@ -683,7 +683,7 @@ async function runStage7Tests() {
     assert(renderedText.includes('[command] npm install'), 'Dashboard must display [command]');
     assert(renderedText.includes('[file edit] Sidebar.tsx'), 'Dashboard must display [file edit] and file name');
     assert(!renderedText.includes('src/components/Sidebar.tsx'), 'Dashboard must show file name, NOT full path');
-    assert(renderedText.includes('[unrecognized] unrecognized prompt'), 'Dashboard must display [unrecognized]');
+    assert(renderedText.includes('[unrecognized] prompt'), 'Dashboard must display [unrecognized]');
 
     // 7.3: Status file prompt serialization
     const statusManager = new SessionStatusManager({

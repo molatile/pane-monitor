@@ -31,6 +31,7 @@ function loadConfig(configPath = CONFIG_PATH) {
         autoOpenWindow: true,
         autoPaused: false,
         autoAcceptDefault: false,
+        keepAcceptingWhenNoWindow: false,
         allowTurnOnFromWindow: false,
         unlockBuiltinDenyRules: false,
         timeFormat: '24-hour',
@@ -48,6 +49,7 @@ function loadConfig(configPath = CONFIG_PATH) {
         autoOpenWindow: true,
         autoPaused: false,
         autoAcceptDefault: false,
+        keepAcceptingWhenNoWindow: false,
         allowTurnOnFromWindow: false,
         unlockBuiltinDenyRules: false,
         timeFormat: '24-hour',
@@ -64,6 +66,7 @@ function loadConfig(configPath = CONFIG_PATH) {
       autoOpenWindow: parsed.autoOpenWindow !== undefined ? Boolean(parsed.autoOpenWindow) : true,
       autoPaused: Boolean(parsed.autoPaused),
       autoAcceptDefault: Boolean(parsed.autoAcceptDefault),
+      keepAcceptingWhenNoWindow: Boolean(parsed.keepAcceptingWhenNoWindow),
       allowTurnOnFromWindow: Boolean(parsed.allowTurnOnFromWindow),
       unlockBuiltinDenyRules: Boolean(parsed.unlockBuiltinDenyRules),
       timeFormat: (parsed.timeFormat === '12-hour' || parsed.timeFormat === '12h') ? '12-hour' : '24-hour',
@@ -131,6 +134,9 @@ function saveConfig(config, configPath = CONFIG_PATH) {
     }
     if (config.autoAcceptDefault !== undefined) {
       sanitized.autoAcceptDefault = Boolean(config.autoAcceptDefault);
+    }
+    if (config.keepAcceptingWhenNoWindow !== undefined) {
+      sanitized.keepAcceptingWhenNoWindow = Boolean(config.keepAcceptingWhenNoWindow);
     }
     if (config.allowTurnOnFromWindow !== undefined) {
       sanitized.allowTurnOnFromWindow = Boolean(config.allowTurnOnFromWindow);
@@ -394,6 +400,42 @@ function setAutoAcceptDefault(config, enabled, configPath = CONFIG_PATH) {
   config.autoAcceptDefault = Boolean(enabled);
   saveConfig(config, configPath);
   return config;
+}
+
+function setKeepAcceptingWhenNoWindow(config, enabled, configPath = CONFIG_PATH) {
+  config.keepAcceptingWhenNoWindow = Boolean(enabled);
+  saveConfig(config, configPath);
+  return config;
+}
+
+function getViewersDir(agentwatchDir) {
+  const base = agentwatchDir || (process.env.AGENTWATCH_DIR || path.join(os.homedir(), '.agentwatch'));
+  return process.env.AGENTWATCH_VIEWERS_DIR || path.join(base, 'viewers');
+}
+
+function hasFreshViewer(viewersDir, maxAgeMs = 10000) {
+  const dir = viewersDir || getViewersDir();
+  try {
+    if (!fs.existsSync(dir)) return false;
+    const files = fs.readdirSync(dir);
+    const now = Date.now();
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      const full = path.join(dir, f);
+      try {
+        const stat = fs.statSync(full);
+        if (now - stat.mtimeMs <= maxAgeMs) {
+          return true;
+        }
+        const content = fs.readFileSync(full, 'utf8');
+        const data = JSON.parse(content);
+        if (data && typeof data.time === 'number' && (now - data.time <= maxAgeMs)) {
+          return true;
+        }
+      } catch (e) {}
+    }
+  } catch (e) {}
+  return false;
 }
 
 function setAllowTurnOnFromWindow(config, enabled, configPath = CONFIG_PATH) {
@@ -802,6 +844,9 @@ module.exports = {
   setAutoOpenWindow,
   setAutoPaused,
   setAutoAcceptDefault,
+  setKeepAcceptingWhenNoWindow,
+  getViewersDir,
+  hasFreshViewer,
   setAllowTurnOnFromWindow,
   setTimeFormat,
   setLogDir,

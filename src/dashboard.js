@@ -100,7 +100,7 @@ function getSessionSummary(session) {
     if (session.prompt && session.prompt.decision && session.prompt.decision.startsWith('DANGER:')) {
       return session.prompt.decision;
     }
-    if (session.prompt && (session.prompt.type === 'unrecognized' || session.prompt.label === 'unrecognized prompt')) {
+    if (session.prompt && (session.prompt.type === 'unrecognized' || session.prompt.label === 'unrecognized prompt' || session.prompt.label === 'prompt')) {
       return 'unrecognized prompt';
     }
     if (session.prompt && (session.prompt.type === 'file_edit' || session.prompt.type === 'file edit')) {
@@ -206,11 +206,23 @@ function renderDashboardLines(options = {}) {
         if (pType === 'file_edit' || pType === 'file edit') {
           typeLabel = 'file edit';
           targetText = session.prompt.fileName || (session.prompt.targetFile ? path.basename(session.prompt.targetFile.replace(/\\/g, '/')) : (session.prompt.command || 'file'));
-        } else if (pType === 'unrecognized' || session.prompt.label === 'unrecognized prompt') {
+        } else if (pType === 'unrecognized' || session.prompt.label === 'unrecognized prompt' || session.prompt.label === 'prompt') {
           typeLabel = 'unrecognized';
-          targetText = session.prompt.label || 'unrecognized prompt';
+          targetText = 'prompt';
         }
-        const decision = session.prompt.decision || 'needs you';
+        let decision = session.prompt.decision || 'needs you';
+        if (typeof decision === 'string') {
+          if (decision.startsWith('DANGER: matched ')) {
+            decision = decision.replace(/^DANGER:\s*matched\s*/i, 'needs you because: danger word ');
+          } else if (decision === 'needs you') {
+            decision = 'needs you because: no rule matched';
+          } else if (decision.includes('tie between options')) {
+            const tieM = decision.match(/(tie between options \d+(?: and \d+)+)/i);
+            decision = `needs you because: ${tieM ? tieM[1] : decision}`;
+          } else if (pType === 'unrecognized' && (decision === 'needs you' || decision.includes('unrecognized prompt') || decision === 'needs you because: no rule matched')) {
+            decision = 'needs you because: unrecognized prompt';
+          }
+        }
         const line2 = useColor
           ? `      ↳ \x1b[90m[${typeLabel}]\x1b[0m \x1b[1;37m${targetText}\x1b[0m \x1b[33m(${decision})\x1b[0m`
           : `      ↳ [${typeLabel}] ${targetText} (${decision})`;
@@ -278,7 +290,28 @@ function startDashboard(options = {}) {
     } catch (e) {}
   }
 
+  const viewersDir = options.viewersDir || (process.env.AGENTWATCH_VIEWERS_DIR || path.join(os.homedir(), '.agentwatch', 'viewers'));
+  try { fs.mkdirSync(viewersDir, { recursive: true }); } catch (e) {}
+  const dashHeartbeatFile = path.join(viewersDir, `viewer-dash-${process.pid}.json`);
+
+  function writeHeartbeat() {
+    try {
+      fs.writeFileSync(dashHeartbeatFile, JSON.stringify({ pid: process.pid, type: 'dashboard', time: Date.now() }), 'utf8');
+    } catch (e) {}
+  }
+
+  function removeHeartbeat() {
+    try {
+      if (fs.existsSync(dashHeartbeatFile)) fs.unlinkSync(dashHeartbeatFile);
+    } catch (e) {}
+  }
+
+  writeHeartbeat();
+  process.on('exit', removeHeartbeat);
+
   function cleanup() {
+    removeHeartbeat();
+    process.removeListener('exit', removeHeartbeat);
     if (!isRunning) return;
     isRunning = false;
 
@@ -314,6 +347,7 @@ function startDashboard(options = {}) {
     if (!isRunning) return;
 
     // Reload config & session list
+    writeHeartbeat();
     config = loadConfig(configPath);
     const rawSessions = getSessionStatusList(sessionsDir);
     sessions = orderSessions(rawSessions, config);

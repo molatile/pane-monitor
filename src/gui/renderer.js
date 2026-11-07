@@ -54,6 +54,7 @@ const loadOlderBtn = getEl('load-older-btn');
 const settingAutoOpen = getEl('setting-auto-open');
 const settingAutoPaused = getEl('setting-auto-paused');
 const settingAutoAcceptDefault = getEl('setting-auto-accept-default');
+const settingKeepAcceptingNoWindow = getEl('setting-keep-accepting-no-window');
 const settingAllowTurnOn = getEl('setting-allow-turn-on');
 const settingUnlockBuiltinDeny = getEl('setting-unlock-builtin-deny');
 const settingPinTop = getEl('setting-pin-top');
@@ -845,11 +846,23 @@ function createRow(session) {
     if (pType === 'file_edit' || pType === 'file edit') {
       typeLabel = 'file edit';
       targetText = session.prompt.fileName || (session.prompt.targetFile ? session.prompt.targetFile.split(/[/\\]/).pop() : (session.prompt.command || 'file'));
-    } else if (pType === 'unrecognized' || session.prompt.label === 'unrecognized prompt') {
+    } else if (pType === 'unrecognized' || session.prompt.label === 'unrecognized prompt' || session.prompt.label === 'prompt') {
       typeLabel = 'unrecognized';
-      targetText = session.prompt.label || 'unrecognized prompt';
+      targetText = 'prompt';
     }
-    const decisionText = session.prompt.decision || 'needs you';
+    let decisionText = session.prompt.decision || 'needs you';
+    if (typeof decisionText === 'string') {
+      if (decisionText.startsWith('DANGER: matched ')) {
+        decisionText = decisionText.replace(/^DANGER:\s*matched\s*/i, 'needs you because: danger word ');
+      } else if (decisionText === 'needs you') {
+        decisionText = 'needs you because: no rule matched';
+      } else if (decisionText.includes('tie between options')) {
+        const tieM = decisionText.match(/(tie between options \d+(?: and \d+)+)/i);
+        decisionText = `needs you because: ${tieM ? tieM[1] : decisionText}`;
+      } else if (pType === 'unrecognized' && (decisionText === 'needs you' || decisionText.includes('unrecognized prompt') || decisionText === 'needs you because: no rule matched')) {
+        decisionText = 'needs you because: unrecognized prompt';
+      }
+    }
     promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-type-tag">[${escapeHtml(typeLabel)}]</span> <span class="prompt-cmd">${escapeHtml(targetText)}</span> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
     promptEl.style.display = '';
   } else {
@@ -983,11 +996,23 @@ function updateRow(entry, session) {
     if (pType === 'file_edit' || pType === 'file edit') {
       typeLabel = 'file edit';
       targetText = session.prompt.fileName || (session.prompt.targetFile ? session.prompt.targetFile.split(/[/\\]/).pop() : (session.prompt.command || 'file'));
-    } else if (pType === 'unrecognized' || session.prompt.label === 'unrecognized prompt') {
+    } else if (pType === 'unrecognized' || session.prompt.label === 'unrecognized prompt' || session.prompt.label === 'prompt') {
       typeLabel = 'unrecognized';
-      targetText = session.prompt.label || 'unrecognized prompt';
+      targetText = 'prompt';
     }
-    const decisionText = session.prompt.decision || 'needs you';
+    let decisionText = session.prompt.decision || 'needs you';
+    if (typeof decisionText === 'string') {
+      if (decisionText.startsWith('DANGER: matched ')) {
+        decisionText = decisionText.replace(/^DANGER:\s*matched\s*/i, 'needs you because: danger word ');
+      } else if (decisionText === 'needs you') {
+        decisionText = 'needs you because: no rule matched';
+      } else if (decisionText.includes('tie between options')) {
+        const tieM = decisionText.match(/(tie between options \d+(?: and \d+)+)/i);
+        decisionText = `needs you because: ${tieM ? tieM[1] : decisionText}`;
+      } else if (pType === 'unrecognized' && (decisionText === 'needs you' || decisionText.includes('unrecognized prompt') || decisionText === 'needs you because: no rule matched')) {
+        decisionText = 'needs you because: unrecognized prompt';
+      }
+    }
     entry.promptEl.innerHTML = `<span class="prompt-arrow">↳</span> <span class="prompt-type-tag">[${escapeHtml(typeLabel)}]</span> <span class="prompt-cmd">${escapeHtml(targetText)}</span> <span class="prompt-decision">(${escapeHtml(decisionText)})</span>`;
     entry.promptEl.style.display = '';
   } else {
@@ -1601,6 +1626,9 @@ function updateSettingsTab() {
   if (settingAutoAcceptDefault && document.activeElement !== settingAutoAcceptDefault) {
     settingAutoAcceptDefault.checked = Boolean(currentConfig.autoAcceptDefault);
   }
+  if (settingKeepAcceptingNoWindow && document.activeElement !== settingKeepAcceptingNoWindow) {
+    settingKeepAcceptingNoWindow.checked = Boolean(currentConfig.keepAcceptingWhenNoWindow);
+  }
   if (settingAllowTurnOn && document.activeElement !== settingAllowTurnOn) {
     settingAllowTurnOn.checked = Boolean(currentConfig.allowTurnOnFromWindow);
   }
@@ -1809,6 +1837,27 @@ if (settingAutoPaused) {
         currentConfig.autoPaused = !val;
         settingAutoPaused.checked = !val;
         if (pauseCheckbox) pauseCheckbox.checked = !val;
+        showToast(`Error: ${err.message || 'Failed to save setting'}`);
+      });
+    }
+  });
+}
+
+if (settingKeepAcceptingNoWindow) {
+  settingKeepAcceptingNoWindow.addEventListener('change', (e) => {
+    const val = e.target.checked;
+    currentConfig.keepAcceptingWhenNoWindow = val;
+    if (typeof window !== 'undefined' && window.agentwatch && window.agentwatch.setKeepAcceptingWhenNoWindow) {
+      Promise.resolve(window.agentwatch.setKeepAcceptingWhenNoWindow(val)).then((res) => {
+        if (!res || res.success) showToast('Saved');
+        else {
+          currentConfig.keepAcceptingWhenNoWindow = !val;
+          settingKeepAcceptingNoWindow.checked = !val;
+          showToast((res && res.error) ? `Error: ${res.error}` : 'Failed to save setting');
+        }
+      }).catch((err) => {
+        currentConfig.keepAcceptingWhenNoWindow = !val;
+        settingKeepAcceptingNoWindow.checked = !val;
         showToast(`Error: ${err.message || 'Failed to save setting'}`);
       });
     }
@@ -2531,17 +2580,30 @@ function renderOptionRules() {
     endsGroup.appendChild(endsInput);
     fieldsGrid.appendChild(endsGroup);
 
-    // Command starts with field
+    // Advanced section (contains optional commandStartsWith)
+    const advDetails = document.createElement('details');
+    advDetails.className = 'advanced-section';
+    advDetails.style.gridColumn = '1 / -1';
+    advDetails.style.marginTop = '4px';
+    const advSummary = document.createElement('summary');
+    advSummary.textContent = 'Advanced';
+    advSummary.style.cursor = 'pointer';
+    advSummary.style.fontSize = '12px';
+    advSummary.style.color = 'var(--color-text-muted, #94a3b8)';
+    advDetails.appendChild(advSummary);
+
+    // Command starts with field (optional, under Advanced)
     const cmdGroup = document.createElement('div');
     cmdGroup.className = 'form-group';
+    cmdGroup.style.marginTop = '8px';
     const cmdLabel = document.createElement('label');
     cmdLabel.className = 'form-label';
-    cmdLabel.textContent = 'Only for commands starting with:';
+    cmdLabel.textContent = 'Only for commands starting with (optional):';
     const cmdInput = document.createElement('input');
     cmdInput.type = 'text';
     cmdInput.className = 'form-input';
     cmdInput.value = rule.commandStartsWith || '';
-    cmdInput.placeholder = 'Any command (looser)';
+    cmdInput.placeholder = 'Any command (empty by default)';
     cmdInput.addEventListener('input', () => {
       rule.commandStartsWith = cmdInput.value.trim() !== '' ? cmdInput.value : undefined;
       previewEl.textContent = generateRulePreview(rule);
@@ -2551,7 +2613,11 @@ function renderOptionRules() {
     });
     cmdGroup.appendChild(cmdLabel);
     cmdGroup.appendChild(cmdInput);
-    fieldsGrid.appendChild(cmdGroup);
+    advDetails.appendChild(cmdGroup);
+    if (rule.commandStartsWith) {
+      advDetails.open = true;
+    }
+    fieldsGrid.appendChild(advDetails);
 
     // Prompt types field
     const ptGroup = document.createElement('div');
@@ -3453,6 +3519,43 @@ if (testerEvalBtn) {
           traceDiv.appendChild(evalItem);
 
           testerDecisionDetails.appendChild(traceDiv);
+
+          const optionExpls = (res && res.optionExplanations) || (decision && decision.optionExplanations);
+          if (Array.isArray(optionExpls) && optionExpls.length > 0) {
+            const optSection = document.createElement('div');
+            optSection.className = 'options-eval-breakdown';
+            optSection.style.marginTop = '10px';
+            optSection.style.borderTop = '1px solid var(--color-border, #334155)';
+            optSection.style.paddingTop = '8px';
+
+            const optTitle = document.createElement('div');
+            optTitle.style.fontWeight = '600';
+            optTitle.style.fontSize = '12px';
+            optTitle.style.marginBottom = '6px';
+            optTitle.textContent = 'Per-Option Evaluation:';
+            optSection.appendChild(optTitle);
+
+            for (const oe of optionExpls) {
+              const row = document.createElement('div');
+              row.className = `option-eval-row ${oe.matched ? 'matched' : 'not-matched'}`;
+              row.style.marginBottom = '6px';
+              row.style.padding = '4px 6px';
+              row.style.borderRadius = '4px';
+              row.style.background = oe.matched ? 'rgba(34, 197, 94, 0.1)' : 'rgba(100, 116, 139, 0.08)';
+
+              const statusTag = oe.matched ? '[MATCHED]' : '[NOT MATCHED]';
+              const tagColor = oe.matched ? 'var(--color-success, #22c55e)' : 'var(--color-text-muted, #94a3b8)';
+
+              let html = `<div style="font-size: 11px;"><strong style="color: ${tagColor};">${escapeHtml(statusTag)}</strong> Option ${escapeHtml(oe.key)}: <em>"${escapeHtml(oe.text)}"</em></div>`;
+              html += `<div style="font-size: 11px; margin-left: 12px; color: var(--color-text-dim, #cbd5e1);"><strong>Result:</strong> ${escapeHtml(oe.matchResult)}</div>`;
+              if (oe.reasons && oe.reasons.length > 0) {
+                html += `<div style="font-size: 10px; margin-left: 12px; color: var(--color-text-muted, #94a3b8);">Why rules did not match: ${escapeHtml(oe.reasons.join('; '))}</div>`;
+              }
+              row.innerHTML = html;
+              optSection.appendChild(row);
+            }
+            testerDecisionDetails.appendChild(optSection);
+          }
         }
       });
     }

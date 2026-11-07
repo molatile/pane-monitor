@@ -371,6 +371,10 @@ function extractPromptFromScreen(screenLines, profile) {
   for (let i = lineTexts.length - 1; i >= 0; i--) {
     const trimmed = lineTexts[i].trim();
     if (trimmed.length >= 3 && trimmed.endsWith('?') && !isSeparatorLine(trimmed)) {
+      // Agent reply text never counts (e.g. lines starting with markdown bullets/lists)
+      if (/^[*•\-+#]/.test(trimmed)) {
+        continue;
+      }
       const unkOptions = [];
       let curOpt = null;
       for (let j = i + 1; j < lineTexts.length; j++) {
@@ -439,9 +443,107 @@ function getSelectedOptionNumberFromScreen(screenLines) {
   return 1;
 }
 
+/**
+ * Determines whether a detected prompt (recognized or unrecognized) is currently live.
+ * A prompt is live only if:
+ * 1. It is not agent reply text (e.g. question starts with markdown bullet *,-,+,#,•).
+ * 2. It shows a live-prompt marker: a '>' selection marker on an option, or the navigation footer line as defined in the profile.
+ * 3. It is in the live area at the bottom of the screen (all lines after the prompt must be blank/empty).
+ */
+function isPromptLive(detected, screenLines, profile) {
+  if (!detected || !screenLines || screenLines.length === 0) return false;
+
+  const lineTexts = screenLines.map(l => (typeof l === 'string' ? l : (l && l.text ? l.text : '')));
+
+  // 1. Text in the agent's reply never counts
+  const q = (detected.question || '').trim();
+  if (/^[*•\-+#]/.test(q)) {
+    return false;
+  }
+
+  // 2. Shows a live-prompt marker:
+  // (a '>' selection marker on an option, or the navigation footer line, as defined in the profile)
+  let hasSelectionMarker = false;
+  let hasFooterLine = false;
+
+  const footerPattern = (profile && (profile.footerPattern || (profile.prompt && (profile.prompt.footerPattern || profile.prompt.footerPrefix)))) || '↑/↓ Navigate';
+  const footerRegex = new RegExp(footerPattern, 'i');
+
+  let lastPromptLineIndex = -1;
+
+  for (let i = 0; i < lineTexts.length; i++) {
+    const text = lineTexts[i];
+    const trimmed = text.trim();
+
+    if (/^\s*>\s*\d+\./.test(text) || /^\s*>\s*\[/.test(text)) {
+      hasSelectionMarker = true;
+    }
+
+    if (
+      footerRegex.test(trimmed) ||
+      (footerPattern.includes('Navigate') && /^[↑^]\/[↓v]?\s*Navigate/i.test(trimmed)) ||
+      /^(?:[↑^]\/[↓v]?\s*Navigate|navigate\b|use\s+arrow\s+keys|press\s+enter|esc\s+to\s+cancel)/i.test(trimmed)
+    ) {
+      hasFooterLine = true;
+      lastPromptLineIndex = Math.max(lastPromptLineIndex, i);
+    }
+  }
+
+  if (!hasSelectionMarker && !hasFooterLine) {
+    return false;
+  }
+
+  // 3. Live area at the bottom of the screen:
+  // Find where the prompt ends. All lines after it must be blank/empty.
+  let promptEndLineIndex = -1;
+  if (hasFooterLine && lastPromptLineIndex !== -1) {
+    promptEndLineIndex = lastPromptLineIndex;
+  } else if (detected.options && detected.options.length > 0) {
+    const lastOpt = detected.options[detected.options.length - 1];
+    const lastOptKey = lastOpt.key || String(lastOpt.number);
+    const lastOptTextNorm = String(lastOpt.text || '').toLowerCase().replace(/\s+/g, '');
+
+    for (let i = lineTexts.length - 1; i >= 0; i--) {
+      const optMatch = lineTexts[i].match(/^\s*>?\s*(\d+)\./);
+      if (optMatch && optMatch[1] === lastOptKey) {
+        promptEndLineIndex = i;
+        let accumulated = lineTexts[i].replace(/^\s*>?\s*\d+\./, '').toLowerCase().replace(/\s+/g, '');
+        for (let k = i + 1; k < lineTexts.length; k++) {
+          const kTrim = lineTexts[k].trim();
+          if (kTrim === '') break;
+          if (/^\s*>?\s*\d+\./.test(lineTexts[k])) break;
+          if (footerRegex.test(kTrim)) {
+            promptEndLineIndex = k;
+            break;
+          }
+          const nextAcc = accumulated + kTrim.toLowerCase().replace(/\s+/g, '');
+          if (accumulated !== lastOptTextNorm && lastOptTextNorm.startsWith(nextAcc)) {
+            accumulated = nextAcc;
+            promptEndLineIndex = k;
+          } else {
+            break;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  if (promptEndLineIndex !== -1) {
+    for (let i = promptEndLineIndex + 1; i < lineTexts.length; i++) {
+      if (lineTexts[i].trim() !== '') {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 module.exports = {
   extractPromptFromScreen,
   getSelectedOptionNumberFromScreen,
+  isPromptLive,
   isSeparatorLine,
   extractTargetFilePath,
   appendUnknownPromptSample

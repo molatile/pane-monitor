@@ -369,7 +369,7 @@ async function runStage4bTests() {
       console.log('  ✓ Multiple matches inside winning rule after skipped rule mark needs_user');
     }
 
-    // Test 2.3: Multiple matches (2 different options match the SAME rule) -> needs_user
+    // Test 2.3: Multiple matches (2 different options match the SAME rule and tie on extra text length) -> needs_user
     {
       const customRules = {
         deny: DEFAULT_RULES.deny,
@@ -383,8 +383,8 @@ async function runStage4bTests() {
         commandSpaced: 'git status',
         question: 'Run this command?',
         options: [
-          { key: '1', number: 1, text: 'Yes, allow for this run', classification: 'yes_once' },
-          { key: '2', number: 2, text: 'Yes, allow for whole conversation', classification: 'yes_session' },
+          { key: '1', number: 1, text: 'Yes, allow option 1', classification: 'yes_once' },
+          { key: '2', number: 2, text: 'Yes, allow option 2', classification: 'yes_session' },
           { key: '3', number: 3, text: 'No, cancel', classification: 'no' }
         ]
       };
@@ -409,8 +409,8 @@ async function runStage4bTests() {
         commandSpaced: 'git status',
         question: 'Run this command?',
         options: [
-          { key: '1', number: 1, text: 'Yes, allow specific', classification: 'yes_session' },
-          { key: '2', number: 2, text: 'Yes, allow general', classification: 'yes_once' },
+          { key: '1', number: 1, text: 'Yes, allow specific 1', classification: 'yes_session' },
+          { key: '2', number: 2, text: 'Yes, allow specific 2', classification: 'yes_once' },
           { key: '3', number: 3, text: 'No, cancel', classification: 'no' }
         ]
       };

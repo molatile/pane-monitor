@@ -140,12 +140,6 @@
       "enabled": true
     },
     {
-      "text": "push",
-      "wholeWord": false,
-      "level": "hard",
-      "enabled": true
-    },
-    {
       "text": "publish",
       "wholeWord": false,
       "level": "hard",
@@ -159,12 +153,6 @@
     },
     {
       "text": "uninstall",
-      "wholeWord": false,
-      "level": "hard",
-      "enabled": true
-    },
-    {
-      "text": "curl",
       "wholeWord": false,
       "level": "hard",
       "enabled": true
@@ -308,6 +296,13 @@
         "file_edit"
       ],
       "enabled": false
+    },
+    {
+      "name": "custom-rule-5",
+      "startsWith": "Yes, and always allow in this conversation for commands that start with 'node -e \"",
+      "commandStartsWith": "node -e",
+      "enabled": true,
+      "allowPersist": false
     }
   ]
 }
